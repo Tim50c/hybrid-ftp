@@ -101,6 +101,8 @@ func handleSession(conn net.Conn, mgr *session.Manager, root, usersPath string) 
 			handleTYPE(conn, sess, args)
 		case tcpctrl.CmdPASV:
 			handlePASV(conn, sess, args)
+		case tcpctrl.CmdPORT:
+			handlePORT(conn, sess, root, args)
 		case tcpctrl.CmdLIST:
 			handleLIST(conn, sess, root, args)
 		case tcpctrl.CmdRETR:

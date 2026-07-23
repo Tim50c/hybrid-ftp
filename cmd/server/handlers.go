@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"hybrid-ftp/internal/auth"
@@ -147,6 +148,7 @@ func handlePASV(conn net.Conn, sess *session.Session, args string) {
 		sess.DataConn.Close()
 	}
 	sess.DataConn = udpConn
+	sess.DataMode = "PASV"
 
 	port := udpConn.LocalAddr().(*net.UDPAddr).Port
 	host, _, _ := net.SplitHostPort(conn.LocalAddr().String())
@@ -163,6 +165,34 @@ func handlePASV(conn net.Conn, sess *session.Session, args string) {
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyPASV,
 		fmt.Sprintf("Entering Passive Mode (%d,%d,%d,%d,%d,%d).",
 			ip4[0], ip4[1], ip4[2], ip4[3], p1, p2))
+}
+
+func handlePORT(conn net.Conn, sess *session.Session, root string, args string) {
+	parts := strings.Split(args, ",")
+	if len(parts) != 6 {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "PORT requires h1,h2,h3,h4,p1,p2.")
+		return
+	}
+	nums := make([]int, 6)
+	for i, p := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(p))
+		if err != nil || n < 0 || n > 255 {
+			tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "Invalid PORT parameter.")
+			return
+		}
+		nums[i] = n
+	}
+	ip := fmt.Sprintf("%d.%d.%d.%d", nums[0], nums[1], nums[2], nums[3])
+	port := nums[4]*256 + nums[5]
+
+	sess.DataAddr = &net.UDPAddr{IP: net.ParseIP(ip), Port: port}
+	sess.DataMode = "PORT"
+	if sess.DataConn != nil {
+		sess.DataConn.Close()
+		sess.DataConn = nil
+	}
+	log.Printf("[CTRL] session %d PORT %s:%d", sess.ID, ip, port)
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyOK, "PORT command successful.")
 }
 
 func handleLIST(conn net.Conn, sess *session.Session, root string, args string) {
