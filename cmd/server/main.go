@@ -107,6 +107,26 @@ func handleSession(conn net.Conn, mgr *session.Manager, root, usersPath string) 
 			handleRETR(conn, sess, root, args)
 		case tcpctrl.CmdSTOR:
 			handleSTOR(conn, sess, root, args)
+		case tcpctrl.CmdNOOP:
+			handleNOOP(conn, sess, root, args)
+		case tcpctrl.CmdCDUP:
+			handleCDUP(conn, sess, root, args)
+		case tcpctrl.CmdMKD:
+			handleMKD(conn, sess, root, args)
+		case tcpctrl.CmdRMD:
+			handleRMD(conn, sess, root, args)
+		case tcpctrl.CmdDELE:
+			handleDELE(conn, sess, root, args)
+		case tcpctrl.CmdMODE:
+			handleMODE(conn, sess, root, args)
+		case tcpctrl.CmdHELP:
+			handleHELP(conn, sess, root, args)
+		case tcpctrl.CmdSTAT:
+			handleSTAT(conn, sess, root, args)
+		case tcpctrl.CmdSIZE:
+			handleSIZE(conn, sess, root, args)
+		case tcpctrl.CmdMDTM:
+			handleMDTM(conn, sess, root, args)
 		default:
 			tcpctrl.WriteReply(conn, tcpctrl.ReplySyntaxError, "Unknown command.")
 		}

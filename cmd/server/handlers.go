@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"hybrid-ftp/internal/auth"
 	"hybrid-ftp/internal/fs"
@@ -271,4 +272,129 @@ func handleSTOR(conn net.Conn, sess *session.Session, root string, args string) 
 	cleanupDataConn(sess)
 
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Transfer complete.")
+}
+
+func handleNOOP(conn net.Conn, sess *session.Session, root string, args string) {
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyOK, "NOOP ok.")
+}
+
+func handleCDUP(conn net.Conn, sess *session.Session, root string, args string) {
+	if err := fs.ChangeDir(root, sess, ".."); err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot change to parent.")
+		return
+	}
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileActionOK, "Directory changed to parent.")
+}
+
+func handleMKD(conn net.Conn, sess *session.Session, root string, args string) {
+	if args == "" {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "MKD requires a directory name.")
+		return
+	}
+	if err := fs.MakeDir(root, sess, args); err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot create directory.")
+		return
+	}
+	absRoot, _ := filepath.Abs(root)
+	fullPath := filepath.Join(absRoot, fs.ResolvePath(sess, args))
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyPathCreated, fmt.Sprintf("\"%s\" created.", fullPath))
+}
+
+func handleRMD(conn net.Conn, sess *session.Session, root string, args string) {
+	if args == "" {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "RMD requires a directory name.")
+		return
+	}
+	if err := fs.RemoveDir(root, sess, args); err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot remove directory.")
+		return
+	}
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileActionOK, "Directory removed.")
+}
+
+func handleDELE(conn net.Conn, sess *session.Session, root string, args string) {
+	if args == "" {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "DELE requires a filename.")
+		return
+	}
+	if err := fs.DeleteFile(root, sess, args); err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot delete file.")
+		return
+	}
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileActionOK, "File deleted.")
+}
+
+func handleMODE(conn net.Conn, sess *session.Session, root string, args string) {
+	if len(args) == 0 {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "MODE requires S, B, or C.")
+		return
+	}
+	switch args[0] {
+	case 'S', 's':
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyOK, "Mode set to Stream.")
+	case 'B', 'b':
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyNotImpl, "Block mode not implemented.")
+	case 'C', 'c':
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyNotImpl, "Compressed mode not implemented.")
+	default:
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "MODE must be S, B, or C.")
+	}
+}
+
+func handleHELP(conn net.Conn, sess *session.Session, root string, args string) {
+	commands := "USER PASS QUIT NOOP PWD CWD CDUP MKD RMD LIST NLST STAT SIZE MDTM TYPE MODE PORT PASV RETR STOR STOU APPE DELE RNFR RNTO HASH ABOR HELP"
+	if args == "" {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyHelp, fmt.Sprintf("Supported commands: %s", commands))
+		return
+	}
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyHelp, fmt.Sprintf("Help for %s: see RFC 959.", strings.ToUpper(args)))
+}
+
+func handleSTAT(conn net.Conn, sess *session.Session, root string, args string) {
+	if args == "" {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplySystemStatus, "Hybrid FTP server status: running.")
+		return
+	}
+	info, err := fs.StatPath(root, sess, args)
+	if err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot stat path.")
+		return
+	}
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileStatus, strings.TrimRight(info, "\r\n"))
+}
+
+func handleSIZE(conn net.Conn, sess *session.Session, root string, args string) {
+	if args == "" {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "SIZE requires a filename.")
+		return
+	}
+	fullPath, err := fs.ResolveSafe(root, sess, args)
+	if err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
+		return
+	}
+	size, err := fs.FileSize(fullPath)
+	if err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot get file size.")
+		return
+	}
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileStatus, fmt.Sprintf("%d", size))
+}
+
+func handleMDTM(conn net.Conn, sess *session.Session, root string, args string) {
+	if args == "" {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "MDTM requires a filename.")
+		return
+	}
+	fullPath, err := fs.ResolveSafe(root, sess, args)
+	if err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
+		return
+	}
+	mt, err := fs.ModTime(fullPath)
+	if err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot get modification time.")
+		return
+	}
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileStatus, mt.Format("20060102150405"))
 }
