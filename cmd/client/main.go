@@ -85,11 +85,13 @@ func main() {
 			continue
 		}
 
-		if _, err := io.WriteString(conn, line+"\r\n"); err != nil {
-			log.Fatalf("write error: %v", err)
-		}
-
 		cmd, _ := tcpctrl.ParseCommand(line)
+
+		if cmd != tcpctrl.CmdPORT && cmd != tcpctrl.CmdHASH {
+			if _, err := io.WriteString(conn, line+"\r\n"); err != nil {
+				log.Fatalf("write error: %v", err)
+			}
+		}
 
 		switch cmd {
 		case tcpctrl.CmdPORT:
@@ -217,6 +219,10 @@ func prepareDataTransfer() (*net.UDPConn, func(), error) {
 
 func handlePORT(conn net.Conn) {
 	ip4 := conn.LocalAddr().(*net.TCPAddr).IP.To4()
+	if ip4 == nil {
+		fmt.Println("PORT: IPv6 not supported")
+		return
+	}
 	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err != nil {
 		fmt.Printf("PORT: %v\n", err)
@@ -389,7 +395,11 @@ func handleSTOR(conn net.Conn, filename string) {
 	}
 	defer localFile.Close()
 
-	fileInfo, _ := localFile.Stat()
+	fileInfo, err := localFile.Stat()
+	if err != nil {
+		fmt.Printf("Cannot stat local file: %v\n", err)
+		return
+	}
 
 	udpConn, cleanup, err := prepareDataTransfer()
 	if err != nil {
