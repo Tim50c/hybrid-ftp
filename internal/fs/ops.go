@@ -17,6 +17,23 @@ func ResolvePath(sess *session.Session, path string) string {
 	return filepath.Clean(filepath.Join(sess.CWD, path))
 }
 
+func ResolveSafe(baseRoot string, sess *session.Session, relPath string) (string, error) {
+	target := ResolvePath(sess, relPath)
+	absRoot, err := filepath.Abs(baseRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve root: %w", err)
+	}
+	fullPath := filepath.Clean(filepath.Join(absRoot, target))
+	rel, err := filepath.Rel(absRoot, fullPath)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("path outside root: %s", relPath)
+	}
+	if fullPath != absRoot && !strings.HasPrefix(fullPath, absRoot+string(os.PathSeparator)) {
+		return "", fmt.Errorf("path outside root: %s", relPath)
+	}
+	return fullPath, nil
+}
+
 func ListDir(dirPath string) ([]os.FileInfo, error) {
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {

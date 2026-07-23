@@ -121,6 +121,7 @@ func (s *Sender) Connect(addr *net.UDPAddr) error {
 }
 
 func (s *Sender) Accept() error {
+	s.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	for {
 		buf := make([]byte, 1500)
 		n, addr, err := s.conn.ReadFromUDP(buf)

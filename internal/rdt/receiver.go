@@ -20,17 +20,18 @@ const (
 )
 
 type Receiver struct {
-	conn       *net.UDPConn
-	sessionID  uint32
-	remoteAddr *net.UDPAddr
-	mu         sync.Mutex
-	state      receiverState
-	rcvBase    uint32
-	recvBuffer map[uint32][]byte
-	recvWindow uint16
-	maxBuffer  int
-	output     chan []byte
-	done       chan struct{}
+	conn        *net.UDPConn
+	sessionID   uint32
+	remoteAddr  *net.UDPAddr
+	mu          sync.Mutex
+	state       receiverState
+	rcvBase     uint32
+	recvBuffer  map[uint32][]byte
+	recvWindow  uint16
+	maxBuffer   int
+	output      chan []byte
+	outputDone  bool
+	done        chan struct{}
 }
 
 func NewReceiver(conn *net.UDPConn, sessionID uint32) *Receiver {
@@ -51,6 +52,7 @@ func (r *Receiver) Accept() error {
 	r.state = recvAccepting
 	r.mu.Unlock()
 
+	r.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	for {
 		buf := make([]byte, 1500)
 		n, addr, err := r.conn.ReadFromUDP(buf)
@@ -165,7 +167,12 @@ func (r *Receiver) Close() error {
 		r.mu.Unlock()
 		time.Sleep(100 * time.Millisecond)
 	}
-	close(r.output)
+	r.mu.Lock()
+	if !r.outputDone {
+		close(r.output)
+		r.outputDone = true
+	}
+	r.mu.Unlock()
 	return nil
 }
 
@@ -217,6 +224,14 @@ func (r *Receiver) windowAvailable() uint16 {
 
 func (r *Receiver) receiveLoop() {
 	log.Printf("[RDT] receiver loop started, session=%d", r.sessionID)
+	defer func() {
+		r.mu.Lock()
+		if !r.outputDone {
+			close(r.output)
+			r.outputDone = true
+		}
+		r.mu.Unlock()
+	}()
 	for {
 		select {
 		case <-r.done:
@@ -284,18 +299,25 @@ func (r *Receiver) handleData(hdr *Header, payload []byte) {
 
 	dataLen := uint32(len(payload))
 	if hdr.SeqNum == r.rcvBase {
-		r.output <- payload
 		r.rcvBase += dataLen
 
+		bufferedChunks := make([][]byte, 0)
 		for {
 			buffered, ok := r.recvBuffer[r.rcvBase]
 			if !ok {
 				break
 			}
-			r.output <- buffered
+			bufferedChunks = append(bufferedChunks, buffered)
 			r.rcvBase += uint32(len(buffered))
 			delete(r.recvBuffer, r.rcvBase-uint32(len(buffered)))
 		}
+
+		r.mu.Unlock()
+		r.output <- payload
+		for _, chunk := range bufferedChunks {
+			r.output <- chunk
+		}
+		r.mu.Lock()
 
 		r.sendAck(r.rcvBase)
 	} else if hdr.SeqNum > r.rcvBase {

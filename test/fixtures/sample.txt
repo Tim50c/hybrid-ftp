@@ -1,0 +1,8 @@
+Hello, Hybrid FTP!
+This is a sample text file for testing upload and download.
+It has multiple lines to verify ASCII text handling.
+
+Line 3: The quick brown fox jumps over the lazy dog.
+Line 4: 0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ
+Line 5: Special chars: !@#$%^&*()_+-=[]{}|;':",./<>?
+Line 6: This is the end of the sample file.

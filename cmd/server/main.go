@@ -116,15 +116,17 @@ func handleSession(conn net.Conn, mgr *session.Manager, root, usersPath string) 
 			tcpctrl.WriteReply(conn, tcpctrl.ReplyPathCreated, fmt.Sprintf("\"%s\" is current directory.", cwd))
 
 		case tcpctrl.CmdCWD:
-			target := fs.ResolvePath(sess, args)
-			absRoot, _ := filepath.Abs(root)
-			fullPath := filepath.Join(absRoot, target)
+			fullPath, err := fs.ResolveSafe(root, sess, args)
+			if err != nil {
+				tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
+				continue
+			}
 			info, err := os.Stat(fullPath)
 			if err != nil || !info.IsDir() {
 				tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Directory not found.")
 				continue
 			}
-			sess.CWD = target
+			sess.CWD = fs.ResolvePath(sess, args)
 			tcpctrl.WriteReply(conn, tcpctrl.ReplyFileActionOK, "Directory changed.")
 
 		case tcpctrl.CmdTYPE:
@@ -171,9 +173,11 @@ func handleSession(conn net.Conn, mgr *session.Manager, root, usersPath string) 
 					ip4[0], ip4[1], ip4[2], ip4[3], p1, p2))
 
 		case tcpctrl.CmdLIST:
-			target := fs.ResolvePath(sess, args)
-			absRoot, _ := filepath.Abs(root)
-			fullPath := filepath.Join(absRoot, target)
+			fullPath, err := fs.ResolveSafe(root, sess, args)
+			if err != nil {
+				tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
+				continue
+			}
 			infos, err := fs.ListDir(fullPath)
 			if err != nil {
 				tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot list directory.")
@@ -198,9 +202,11 @@ func handleSession(conn net.Conn, mgr *session.Manager, root, usersPath string) 
 			tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Directory listing complete.")
 
 		case tcpctrl.CmdRETR:
-			target := fs.ResolvePath(sess, args)
-			absRoot, _ := filepath.Abs(root)
-			fullPath := filepath.Join(absRoot, target)
+			fullPath, err := fs.ResolveSafe(root, sess, args)
+			if err != nil {
+				tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
+				continue
+			}
 			file, info, err := fs.OpenForRead(fullPath)
 			if err != nil {
 				tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, fmt.Sprintf("Cannot open %s.", args))
@@ -244,9 +250,11 @@ func handleSession(conn net.Conn, mgr *session.Manager, root, usersPath string) 
 			tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Transfer complete.")
 
 		case tcpctrl.CmdSTOR:
-			target := fs.ResolvePath(sess, args)
-			absRoot, _ := filepath.Abs(root)
-			fullPath := filepath.Join(absRoot, target)
+			fullPath, err := fs.ResolveSafe(root, sess, args)
+			if err != nil {
+				tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
+				continue
+			}
 			file, err := fs.OpenForWrite(fullPath)
 			if err != nil {
 				tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, fmt.Sprintf("Cannot create %s.", args))
@@ -270,10 +278,12 @@ func handleSession(conn net.Conn, mgr *session.Manager, root, usersPath string) 
 			for chunk := range serverReceiver.Receive() {
 				if _, err := file.Write(chunk); err != nil {
 					log.Printf("[CTRL] write error: %v", err)
+					serverReceiver.Close()
 					tcpctrl.WriteReply(conn, tcpctrl.ReplyTransferAborted, "Transfer aborted.")
 					return
 				}
 			}
+			serverReceiver.Close()
 
 			tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Transfer complete.")
 

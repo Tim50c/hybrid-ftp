@@ -1,7 +1,6 @@
 package tcpctrl
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"net"
@@ -9,13 +8,19 @@ import (
 )
 
 func ReadLine(conn net.Conn) (string, error) {
-	reader := bufio.NewReader(conn)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return "", fmt.Errorf("read line: %w", err)
+	var buf [1]byte
+	var line []byte
+	for {
+		_, err := conn.Read(buf[:])
+		if err != nil {
+			return "", fmt.Errorf("read line: %w", err)
+		}
+		line = append(line, buf[0])
+		if buf[0] == '\n' {
+			break
+		}
 	}
-	line = strings.TrimRight(line, "\r\n")
-	return line, nil
+	return strings.TrimRight(string(line), "\r\n"), nil
 }
 
 func WriteReply(conn net.Conn, code int, msg string) error {

@@ -189,6 +189,7 @@ func handleList(conn net.Conn) {
 	for chunk := range r.Receive() {
 		listing = append(listing, chunk...)
 	}
+	r.Close()
 	fmt.Print(string(listing))
 
 	reply, _ = tcpctrl.ReadLine(conn)
@@ -234,6 +235,7 @@ func handleRETR(conn net.Conn, filename string) {
 		n, _ := localFile.Write(chunk)
 		total += n
 	}
+	receiver.Close()
 
 	fmt.Printf("Downloaded %d bytes to %s\n", total, filename)
 
@@ -262,7 +264,6 @@ func handleSTOR(conn net.Conn, filename string) {
 		udpAddr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
 		tmpConn, _ := net.DialUDP("udp", nil, udpAddr)
 		tmpConn.Close()
-		tcpctrl.ReadLine(conn)
 		return
 	}
 	defer localFile.Close()
