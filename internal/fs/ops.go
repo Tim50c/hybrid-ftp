@@ -94,6 +94,47 @@ func FormatListEntry(info os.FileInfo) string {
 	return fmt.Sprintf("%s%s %8d %s %s\r\n", entryType, mode[1:], size, modTime, name)
 }
 
+func ChangeDir(root string, sess *session.Session, path string) error {
+	fullPath, err := ResolveSafe(root, sess, path)
+	if err != nil {
+		return fmt.Errorf("change dir: %w", err)
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		return fmt.Errorf("change dir stat: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("not a directory: %s", path)
+	}
+	sess.CWD = ResolvePath(sess, path)
+	log.Printf("[FS] cwd changed to %s", sess.CWD)
+	return nil
+}
+
+func MakeDir(root string, sess *session.Session, dirname string) error {
+	fullPath, err := ResolveSafe(root, sess, dirname)
+	if err != nil {
+		return fmt.Errorf("make dir: %w", err)
+	}
+	if err := os.Mkdir(fullPath, 0755); err != nil {
+		return fmt.Errorf("make dir: %w", err)
+	}
+	log.Printf("[FS] created directory %s", fullPath)
+	return nil
+}
+
+func RemoveDir(root string, sess *session.Session, dirname string) error {
+	fullPath, err := ResolveSafe(root, sess, dirname)
+	if err != nil {
+		return fmt.Errorf("remove dir: %w", err)
+	}
+	if err := os.Remove(fullPath); err != nil {
+		return fmt.Errorf("remove dir: %w", err)
+	}
+	log.Printf("[FS] removed directory %s", fullPath)
+	return nil
+}
+
 func FormatList(infos []os.FileInfo) string {
 	var sb strings.Builder
 	for _, info := range infos {
