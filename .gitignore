@@ -1,3 +1,11 @@
 REQUIREMENTS.md
 /server
 /client
+
+# nix + direnv (personal config, not for team use)
+shell.nix
+.envrc
+.direnv/
+
+# opencode local config
+opencode.json
