@@ -217,6 +217,186 @@ func TestE2E_UploadDownload(t *testing.T) {
 	fc.sendAndRead(t, "QUIT")
 }
 
+func TestE2E_ManualInteractiveFlow(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	if r := fc.sendAndRead(t, ""); !strings.HasPrefix(r, "220") {
+		t.Fatalf("expected 220, got %s", r)
+	}
+	if r := fc.sendAndRead(t, "USER admin"); !strings.HasPrefix(r, "331") {
+		t.Fatalf("expected 331, got %s", r)
+	}
+	if r := fc.sendAndRead(t, "PASS admin"); !strings.HasPrefix(r, "230") {
+		t.Fatalf("expected 230, got %s", r)
+	}
+
+	reply := fc.sendAndRead(t, "PASV")
+	if !strings.HasPrefix(reply, "227") {
+		t.Fatalf("expected 227, got %s", reply)
+	}
+	host, port, err := parsePASVReply(reply)
+	if err != nil {
+		t.Fatalf("parse PASV: %v", err)
+	}
+
+	os.MkdirAll(filepath.Join(rootDir, "subdir"), 0755)
+	os.WriteFile(filepath.Join(rootDir, "hello.txt"), []byte("hello world\n"), 0644)
+
+	reply = fc.sendAndRead(t, "LIST")
+	if !strings.HasPrefix(reply, "150") {
+		t.Fatalf("expected 150, got %s", reply)
+	}
+	listing := doRDTDownloadString(t, host, port)
+	if !strings.Contains(listing, "hello.txt") {
+		t.Errorf("LIST should contain hello.txt, got: %s", listing)
+	}
+	r := fc.readReply(t)
+	if !strings.HasPrefix(r, "226") {
+		t.Errorf("expected 226, got %s", r)
+	}
+
+	reply = fc.sendAndRead(t, "CWD subdir")
+	if !strings.HasPrefix(reply, "250") {
+		t.Errorf("expected 250, got %s", reply)
+	}
+
+	r = fc.sendAndRead(t, "PWD")
+	if !strings.HasPrefix(r, "257") {
+		t.Errorf("expected 257, got %s", r)
+	}
+
+	reply = fc.sendAndRead(t, "PASV")
+	if !strings.HasPrefix(reply, "227") {
+		t.Fatalf("expected 227, got %s", reply)
+	}
+	host2, port2, err2 := parsePASVReply(reply)
+	if err2 != nil {
+		t.Fatalf("parse PASV: %v", err2)
+	}
+
+	os.WriteFile(filepath.Join(rootDir, "subdir", "nested.txt"), []byte("in subdir\n"), 0644)
+
+	reply = fc.sendAndRead(t, "LIST")
+	if !strings.HasPrefix(reply, "150") {
+		t.Fatalf("expected 150, got %s", reply)
+	}
+	listing2 := doRDTDownloadString(t, host2, port2)
+	if !strings.Contains(listing2, "nested.txt") {
+		t.Errorf("LIST in subdir should contain nested.txt, got: %s", listing2)
+	}
+	fc.readReply(t)
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_List(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	os.WriteFile(filepath.Join(rootDir, "a.txt"), []byte("aaa\n"), 0644)
+	os.WriteFile(filepath.Join(rootDir, "b.txt"), []byte("bbb\n"), 0644)
+	os.MkdirAll(filepath.Join(rootDir, "somedir"), 0755)
+
+	reply := fc.sendAndRead(t, "PASV")
+	host, port, err := parsePASVReply(reply)
+	if err != nil {
+		t.Fatalf("parse PASV: %v", err)
+	}
+
+	reply = fc.sendAndRead(t, "LIST")
+	if !strings.HasPrefix(reply, "150") {
+		t.Fatalf("expected 150, got %s", reply)
+	}
+
+	listing := doRDTDownloadString(t, host, port)
+	if !strings.Contains(listing, "a.txt") {
+		t.Errorf("listing should contain a.txt, got: %s", listing)
+	}
+	if !strings.Contains(listing, "somedir") {
+		t.Errorf("listing should contain somedir, got: %s", listing)
+	}
+
+	fc.readReply(t)
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_PATH_Containment(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	fc.sendAndRead(t, "PASV")
+	reply := fc.sendAndRead(t, "RETR /etc/passwd")
+	if !strings.HasPrefix(reply, "550") {
+		t.Errorf("RETR /etc/passwd should be 550 (jailed inside root, not found), got %s", reply)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_CWD(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	os.MkdirAll(filepath.Join(rootDir, "mydir"), 0755)
+
+	reply := fc.sendAndRead(t, "CWD mydir")
+	if !strings.HasPrefix(reply, "250") {
+		t.Errorf("expected 250, got %s", reply)
+	}
+
+	reply = fc.sendAndRead(t, "PWD")
+	if !strings.HasPrefix(reply, "257") {
+		t.Errorf("expected 257, got %s", reply)
+	}
+	if !strings.Contains(reply, "mydir") {
+		t.Errorf("PWD should show mydir, got %s", reply)
+	}
+
+	reply = fc.sendAndRead(t, "CWD /nonexistent")
+	if !strings.HasPrefix(reply, "550") {
+		t.Errorf("expected 550 for nonexistent dir, got %s", reply)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func doRDTDownloadString(t *testing.T, host string, port int) string {
+	data, err := doRDTDownload(t, host, port)
+	if err != nil {
+		t.Fatalf("rdt download: %v", err)
+	}
+	return string(data)
+}
+
 func parsePASVReply(reply string) (string, int, error) {
 	start := strings.Index(reply, "(")
 	end := strings.LastIndex(reply, ")")
