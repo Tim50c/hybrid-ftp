@@ -175,7 +175,7 @@ func handleList(conn net.Conn) {
 	}
 
 	udpAddr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
-	udpConn, _ := net.DialUDP("udp", nil, udpAddr)
+	udpConn, _ := net.ListenUDP("udp", nil)
 	defer udpConn.Close()
 
 	sessionID := uint32(1)
@@ -212,7 +212,7 @@ func handleRETR(conn net.Conn, filename string) {
 	}
 
 	udpAddr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
-	udpConn, _ := net.DialUDP("udp", nil, udpAddr)
+	udpConn, _ := net.ListenUDP("udp", nil)
 	defer udpConn.Close()
 
 	sessionID := uint32(1)
@@ -261,15 +261,14 @@ func handleSTOR(conn net.Conn, filename string) {
 	localFile, err := os.Open(filename)
 	if err != nil {
 		fmt.Printf("Cannot open local file: %v\n", err)
-		udpAddr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
-		tmpConn, _ := net.DialUDP("udp", nil, udpAddr)
+		tmpConn, _ := net.ListenUDP("udp", nil)
 		tmpConn.Close()
 		return
 	}
 	defer localFile.Close()
 
 	udpAddr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
-	udpConn, _ := net.DialUDP("udp", nil, udpAddr)
+	udpConn, _ := net.ListenUDP("udp", nil)
 	defer udpConn.Close()
 
 	sessionID := uint32(1)
