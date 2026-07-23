@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"hybrid-ftp/internal/session"
 )
@@ -141,4 +142,81 @@ func FormatList(infos []os.FileInfo) string {
 		sb.WriteString(FormatListEntry(info))
 	}
 	return sb.String()
+}
+
+func DeleteFile(root string, sess *session.Session, filename string) error {
+	fullPath, err := ResolveSafe(root, sess, filename)
+	if err != nil {
+		return fmt.Errorf("delete file: %w", err)
+	}
+	if err := os.Remove(fullPath); err != nil {
+		return fmt.Errorf("delete file: %w", err)
+	}
+	log.Printf("[FS] deleted %s", fullPath)
+	return nil
+}
+
+func NameList(dirPath string) ([]string, error) {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("name list %s: %w", dirPath, err)
+	}
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	log.Printf("[FS] name list %s: %d entries", dirPath, len(names))
+	return names, nil
+}
+
+func FileSize(filePath string) (int64, error) {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("file size: %w", err)
+	}
+	if info.IsDir() {
+		return 0, fmt.Errorf("cannot SIZE a directory: %s", filePath)
+	}
+	return info.Size(), nil
+}
+
+func ModTime(filePath string) (time.Time, error) {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("mod time: %w", err)
+	}
+	return info.ModTime(), nil
+}
+
+func StatPath(root string, sess *session.Session, path string) (string, error) {
+	fullPath, err := ResolveSafe(root, sess, path)
+	if err != nil {
+		return "", fmt.Errorf("stat: %w", err)
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		return "", fmt.Errorf("stat: %w", err)
+	}
+	var result string
+	if info.IsDir() {
+		result = fmt.Sprintf("Directory: %s\r\nPermissions: %s\r\nModified: %s\r\n",
+			info.Name(), info.Mode(), info.ModTime().Format("20060102150405"))
+	} else {
+		result = fmt.Sprintf("File: %s\r\nSize: %d bytes\r\nPermissions: %s\r\nModified: %s\r\n",
+			info.Name(), info.Size(), info.Mode(), info.ModTime().Format("20060102150405"))
+	}
+	return result, nil
+}
+
+func OpenForAppend(filePath string) (*os.File, error) {
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("mkdir for append: %w", err)
+	}
+	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("open for append: %w", err)
+	}
+	log.Printf("[FS] opened %s for append", filePath)
+	return f, nil
 }
