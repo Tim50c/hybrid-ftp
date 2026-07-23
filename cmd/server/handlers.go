@@ -411,6 +411,126 @@ func handleSIZE(conn net.Conn, sess *session.Session, root string, args string) 
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileStatus, fmt.Sprintf("%d", size))
 }
 
+func handleNLST(conn net.Conn, sess *session.Session, root string, args string) {
+	path := args
+	if path == "" {
+		path = "."
+	}
+	fullPath, err := fs.ResolveSafe(root, sess, path)
+	if err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
+		return
+	}
+	names, err := fs.NameList(fullPath)
+	if err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot list directory.")
+		return
+	}
+	listing := strings.Join(names, "\r\n") + "\r\n"
+
+	sender, err := setupDataSender(sess)
+	if err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		return
+	}
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, "Opening data connection for name list.")
+	sender.Send([]byte(listing))
+	sender.Close()
+	cleanupDataConn(sess)
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Name list complete.")
+}
+
+func handleAPPE(conn net.Conn, sess *session.Session, root string, args string) {
+	if args == "" {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "APPE requires a filename.")
+		return
+	}
+	fullPath, err := fs.ResolveSafe(root, sess, args)
+	if err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
+		return
+	}
+	file, err := fs.OpenForAppend(fullPath)
+	if err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot open file for append.")
+		return
+	}
+	defer file.Close()
+
+	receiver, err := setupDataReceiver(sess)
+	if err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		return
+	}
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, fmt.Sprintf("Opening data connection for %s.", args))
+
+	for chunk := range receiver.Receive() {
+		if _, err := file.Write(chunk); err != nil {
+			log.Printf("[CTRL] write error: %v", err)
+			receiver.Close()
+			tcpctrl.WriteReply(conn, tcpctrl.ReplyTransferAborted, "Transfer aborted.")
+			cleanupDataConn(sess)
+			return
+		}
+	}
+	receiver.Close()
+	cleanupDataConn(sess)
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Transfer complete.")
+}
+
+func handleSTOU(conn net.Conn, sess *session.Session, root string, args string) {
+	uniqueName := fs.GenerateUniqueName("upload.dat")
+	fullPath, err := fs.ResolveSafe(root, sess, uniqueName)
+	if err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot create unique file.")
+		return
+	}
+	file, err := fs.OpenForWrite(fullPath)
+	if err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot create file.")
+		return
+	}
+	defer file.Close()
+
+	receiver, err := setupDataReceiver(sess)
+	if err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		return
+	}
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, fmt.Sprintf("Opening data connection for %s.", uniqueName))
+
+	for chunk := range receiver.Receive() {
+		if _, err := file.Write(chunk); err != nil {
+			log.Printf("[CTRL] write error: %v", err)
+			receiver.Close()
+			tcpctrl.WriteReply(conn, tcpctrl.ReplyTransferAborted, "Transfer aborted.")
+			cleanupDataConn(sess)
+			return
+		}
+	}
+	receiver.Close()
+	cleanupDataConn(sess)
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyPathCreated, fmt.Sprintf("\"%s\" stored.", uniqueName))
+}
+
+func handleHASH(conn net.Conn, sess *session.Session, root string, args string) {
+	if args == "" {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "HASH requires a filename.")
+		return
+	}
+	fullPath, err := fs.ResolveSafe(root, sess, args)
+	if err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
+		return
+	}
+	hash, err := fs.ComputeHash(fullPath)
+	if err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot compute hash.")
+		return
+	}
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileStatus, fmt.Sprintf("SHA-256 0-%s %s", hash, args))
+}
+
 func handleMDTM(conn net.Conn, sess *session.Session, root string, args string) {
 	if args == "" {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "MDTM requires a filename.")

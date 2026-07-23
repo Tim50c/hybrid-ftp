@@ -129,6 +129,14 @@ func handleSession(conn net.Conn, mgr *session.Manager, root, usersPath string) 
 			handleSIZE(conn, sess, root, args)
 		case tcpctrl.CmdMDTM:
 			handleMDTM(conn, sess, root, args)
+		case tcpctrl.CmdNLST:
+			handleNLST(conn, sess, root, args)
+		case tcpctrl.CmdAPPE:
+			handleAPPE(conn, sess, root, args)
+		case tcpctrl.CmdSTOU:
+			handleSTOU(conn, sess, root, args)
+		case tcpctrl.CmdHASH:
+			handleHASH(conn, sess, root, args)
 		default:
 			tcpctrl.WriteReply(conn, tcpctrl.ReplySyntaxError, "Unknown command.")
 		}
