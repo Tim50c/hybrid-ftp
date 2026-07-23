@@ -105,7 +105,7 @@ func (b *BBR) OnACK(ackedBytes uint32, rtt time.Duration, sentAt time.Time, deli
 
 	elapsed := time.Since(sentAt).Seconds()
 	deliveryRate := 0.0
-	if elapsed > 0 {
+	if b.delivered >= deliveredAtSend && elapsed > 0 {
 		deliveryRate = float64(b.delivered-deliveredAtSend) / elapsed
 	}
 

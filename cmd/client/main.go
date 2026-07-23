@@ -363,7 +363,11 @@ func handleRETR(conn net.Conn, filename string) {
 
 	progress := rdt.NewProgressBar(0)
 	for chunk := range receiver.Receive() {
-		n, _ := localFile.Write(chunk)
+		n, err := localFile.Write(chunk)
+		if err != nil {
+			fmt.Printf("Write error: %v\n", err)
+			break
+		}
 		progress.Update(n)
 	}
 	receiver.Close()
@@ -427,7 +431,7 @@ func handleSTOR(conn net.Conn, filename string) {
 	}
 
 	progress := rdt.NewProgressBar(fileInfo.Size())
-	buf := make([]byte, 1400)
+	buf := make([]byte, rdt.MSS)
 	for {
 		n, err := localFile.Read(buf)
 		if n > 0 {
@@ -445,6 +449,7 @@ func handleSTOR(conn net.Conn, filename string) {
 			break
 		}
 	}
+	// Wait for remaining inflight data to drain before closing
 	time.Sleep(200 * time.Millisecond)
 	sender.Close()
 	progress.Done()
