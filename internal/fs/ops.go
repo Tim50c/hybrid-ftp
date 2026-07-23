@@ -1,8 +1,11 @@
 package fs
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"log"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -219,4 +222,52 @@ func OpenForAppend(filePath string) (*os.File, error) {
 	}
 	log.Printf("[FS] opened %s for append", filePath)
 	return f, nil
+}
+
+func RenameFrom(root string, sess *session.Session, oldname string) error {
+	fullPath, err := ResolveSafe(root, sess, oldname)
+	if err != nil {
+		return fmt.Errorf("rename from: %w", err)
+	}
+	if _, err := os.Stat(fullPath); err != nil {
+		return fmt.Errorf("rename from: %w", err)
+	}
+	sess.RnfrPath = fullPath
+	log.Printf("[FS] rename from: %s", fullPath)
+	return nil
+}
+
+func RenameTo(root string, sess *session.Session, newname string) error {
+	if sess.RnfrPath == "" {
+		return fmt.Errorf("no RNFR path set")
+	}
+	fullPath, err := ResolveSafe(root, sess, newname)
+	if err != nil {
+		return fmt.Errorf("rename to: %w", err)
+	}
+	if err := os.Rename(sess.RnfrPath, fullPath); err != nil {
+		return fmt.Errorf("rename to: %w", err)
+	}
+	log.Printf("[FS] renamed %s to %s", sess.RnfrPath, fullPath)
+	sess.RnfrPath = ""
+	return nil
+}
+
+func GenerateUniqueName(originalName string) string {
+	ext := filepath.Ext(originalName)
+	return fmt.Sprintf("stou_%d_%08x%s", time.Now().Unix(), rand.Uint32(), ext)
+}
+
+func ComputeHash(filePath string) (string, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return "", fmt.Errorf("compute hash: %w", err)
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", fmt.Errorf("compute hash: %w", err)
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }

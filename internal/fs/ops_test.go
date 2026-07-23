@@ -176,3 +176,80 @@ func TestOpenForAppend_New(t *testing.T) {
 		t.Errorf("file content = %q, want 'created'", string(data))
 	}
 }
+
+func TestRenameFrom_Valid(t *testing.T) {
+	root, sess := setupTestRoot(t)
+	os.WriteFile(filepath.Join(root, "old.txt"), []byte("data"), 0644)
+
+	err := RenameFrom(root, sess, "old.txt")
+	if err != nil {
+		t.Fatalf("RenameFrom: %v", err)
+	}
+	if sess.RnfrPath == "" {
+		t.Error("RnfrPath should be set after RenameFrom")
+	}
+}
+
+func TestRenameFrom_Nonexistent(t *testing.T) {
+	root, sess := setupTestRoot(t)
+	err := RenameFrom(root, sess, "nope.txt")
+	if err == nil {
+		t.Error("RenameFrom nonexistent should fail")
+	}
+}
+
+func TestRenameTo_Valid(t *testing.T) {
+	root, sess := setupTestRoot(t)
+	os.WriteFile(filepath.Join(root, "old.txt"), []byte("data"), 0644)
+
+	RenameFrom(root, sess, "old.txt")
+	err := RenameTo(root, sess, "new.txt")
+	if err != nil {
+		t.Fatalf("RenameTo: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "new.txt")); err != nil {
+		t.Error("new file should exist after rename")
+	}
+	if _, err := os.Stat(filepath.Join(root, "old.txt")); !os.IsNotExist(err) {
+		t.Error("old file should not exist after rename")
+	}
+	if sess.RnfrPath != "" {
+		t.Error("RnfrPath should be cleared after RenameTo")
+	}
+}
+
+func TestRenameTo_NoRNFR(t *testing.T) {
+	root, sess := setupTestRoot(t)
+	err := RenameTo(root, sess, "new.txt")
+	if err == nil {
+		t.Error("RenameTo without RNFR should fail")
+	}
+}
+
+func TestGenerateUniqueName(t *testing.T) {
+	n1 := GenerateUniqueName("photo.jpg")
+	n2 := GenerateUniqueName("photo.jpg")
+	if n1 == n2 {
+		t.Error("GenerateUniqueName should produce unique names")
+	}
+	if filepath.Ext(n1) != ".jpg" {
+		t.Errorf("extension should be .jpg, got %s", filepath.Ext(n1))
+	}
+}
+
+func TestComputeHash(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "hash.txt")
+	os.WriteFile(f, []byte("hello\n"), 0644)
+
+	hash, err := ComputeHash(f)
+	if err != nil {
+		t.Fatalf("ComputeHash: %v", err)
+	}
+	if len(hash) != 64 {
+		t.Errorf("hash length = %d, want 64", len(hash))
+	}
+	expected := "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+	if hash != expected {
+		t.Errorf("hash = %s, want %s", hash, expected)
+	}
+}
