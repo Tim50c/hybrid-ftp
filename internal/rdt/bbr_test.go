@@ -137,8 +137,9 @@ func TestBBR_GetDelivered(t *testing.T) {
 		t.Error("should start at 0")
 	}
 
+	deliveredAtSend := b.GetDelivered()
 	b.OnSend(500)
-	b.OnACK(500, 5*time.Millisecond, time.Now().Add(-5*time.Millisecond), b.GetDelivered()-500)
+	b.OnACK(500, 5*time.Millisecond, time.Now().Add(-5*time.Millisecond), deliveredAtSend)
 
 	if b.GetDelivered() != 500 {
 		t.Errorf("expected delivered=500, got %d", b.GetDelivered())
