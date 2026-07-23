@@ -15,24 +15,8 @@ const (
 	CmdPWD
 	CmdLIST
 	CmdCWD
-	CmdNOOP
-	CmdCDUP
-	CmdMKD
-	CmdRMD
-	CmdNLST
-	CmdSTAT
-	CmdSIZE
-	CmdMDTM
-	CmdMODE
-	CmdPORT
-	CmdSTOU
-	CmdAPPE
-	CmdDELE
-	CmdRNFR
-	CmdRNTO
 	CmdHASH
-	CmdABOR
-	CmdHELP
+	CmdPORT
 	CmdUNKNOWN
 )
 
@@ -47,24 +31,8 @@ var commandNames = map[string]Cmd{
 	"PWD":  CmdPWD,
 	"LIST": CmdLIST,
 	"CWD":  CmdCWD,
-	"NOOP": CmdNOOP,
-	"CDUP": CmdCDUP,
-	"MKD":  CmdMKD,
-	"RMD":  CmdRMD,
-	"NLST": CmdNLST,
-	"STAT": CmdSTAT,
-	"SIZE": CmdSIZE,
-	"MDTM": CmdMDTM,
-	"MODE": CmdMODE,
-	"PORT": CmdPORT,
-	"STOU": CmdSTOU,
-	"APPE": CmdAPPE,
-	"DELE": CmdDELE,
-	"RNFR": CmdRNFR,
-	"RNTO": CmdRNTO,
 	"HASH": CmdHASH,
-	"ABOR": CmdABOR,
-	"HELP": CmdHELP,
+	"PORT": CmdPORT,
 }
 
 func ParseCommand(line string) (Cmd, string) {
