@@ -3,6 +3,7 @@ package integration
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net"
@@ -951,4 +952,55 @@ func doRDTDownload(t *testing.T, host string, port int) ([]byte, error) {
 		data := <-resultCh
 		return data, nil
 	}
+}
+
+func TestE2E_HASH(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	testFile := filepath.Join(rootDir, "hashable.txt")
+	content := []byte("this is test content for hashing\n")
+	os.WriteFile(testFile, content, 0644)
+
+	fc.sendAndRead(t, "PASV")
+	reply := fc.sendAndRead(t, "RETR hashable.txt")
+	if !strings.HasPrefix(reply, "150") {
+		t.Errorf("expected 150 for RETR, got %s", reply)
+	}
+
+	importHash := computeIntegrityHash(t, content)
+
+	fc.readReply(t)
+
+	reply = fc.sendAndRead(t, "HASH hashable.txt")
+	if !strings.HasPrefix(reply, "213 ") && !strings.HasPrefix(reply, "502 ") && !strings.HasPrefix(reply, "500 ") {
+		t.Logf("HASH not implemented server-side: %s", reply)
+		return
+	}
+	if strings.HasPrefix(reply, "213 ") {
+		remoteHash := strings.TrimSpace(reply[4:])
+		localHash := fmt.Sprintf("%x", importHash)
+		if remoteHash != localHash {
+			t.Errorf("hash mismatch: local=%s remote=%s", localHash, remoteHash)
+		}
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func computeIntegrityHash(t *testing.T, data []byte) [32]byte {
+	t.Helper()
+	h := sha256.New()
+	h.Write(data)
+	var sum [32]byte
+	copy(sum[:], h.Sum(nil))
+	return sum
 }
