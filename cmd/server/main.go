@@ -137,6 +137,12 @@ func handleSession(conn net.Conn, mgr *session.Manager, root, usersPath string) 
 			handleSTOU(conn, sess, root, args)
 		case tcpctrl.CmdHASH:
 			handleHASH(conn, sess, root, args)
+		case tcpctrl.CmdRNFR:
+			handleRNFR(conn, sess, root, args)
+		case tcpctrl.CmdRNTO:
+			handleRNTO(conn, sess, root, args)
+		case tcpctrl.CmdABOR:
+			handleABOR(conn, sess, root, args)
 		default:
 			tcpctrl.WriteReply(conn, tcpctrl.ReplySyntaxError, "Unknown command.")
 		}

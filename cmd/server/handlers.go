@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -215,6 +216,13 @@ func handleLIST(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, "Opening data connection for directory listing.")
 
+	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
+	defer func() {
+		sess.TransferCancel()
+		sess.TransferCancel = nil
+		sess.TransferCtx = nil
+	}()
+
 	serverSender.Send([]byte(listing))
 	serverSender.Close()
 	cleanupDataConn(sess)
@@ -243,8 +251,23 @@ func handleRETR(conn net.Conn, sess *session.Session, root string, args string) 
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK,
 		fmt.Sprintf("Opening data connection for %s (%d bytes).", args, info.Size()))
 
+	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
+	defer func() {
+		sess.TransferCancel()
+		sess.TransferCancel = nil
+		sess.TransferCtx = nil
+	}()
+
 	buf := make([]byte, 1400)
 	for {
+		select {
+		case <-sess.TransferCtx.Done():
+			log.Printf("[CTRL] transfer aborted by ABOR")
+			tcpctrl.WriteReply(conn, tcpctrl.ReplyTransferAborted, "Transfer aborted.")
+			cleanupDataConn(sess)
+			return
+		default:
+		}
 		n, err := file.Read(buf)
 		if n > 0 {
 			if sendErr := serverSender.Send(buf[:n]); sendErr != nil {
@@ -289,7 +312,22 @@ func handleSTOR(conn net.Conn, sess *session.Session, root string, args string) 
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK,
 		fmt.Sprintf("Opening data connection for %s.", args))
 
+	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
+	defer func() {
+		sess.TransferCancel()
+		sess.TransferCancel = nil
+		sess.TransferCtx = nil
+	}()
+
 	for chunk := range serverReceiver.Receive() {
+		select {
+		case <-sess.TransferCtx.Done():
+			log.Printf("[CTRL] transfer aborted by ABOR")
+			tcpctrl.WriteReply(conn, tcpctrl.ReplyTransferAborted, "Transfer aborted.")
+			cleanupDataConn(sess)
+			return
+		default:
+		}
 		if _, err := file.Write(chunk); err != nil {
 			log.Printf("[CTRL] write error: %v", err)
 			serverReceiver.Close()
@@ -434,6 +472,14 @@ func handleNLST(conn net.Conn, sess *session.Session, root string, args string) 
 		return
 	}
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, "Opening data connection for name list.")
+
+	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
+	defer func() {
+		sess.TransferCancel()
+		sess.TransferCancel = nil
+		sess.TransferCtx = nil
+	}()
+
 	sender.Send([]byte(listing))
 	sender.Close()
 	cleanupDataConn(sess)
@@ -464,7 +510,22 @@ func handleAPPE(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, fmt.Sprintf("Opening data connection for %s.", args))
 
+	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
+	defer func() {
+		sess.TransferCancel()
+		sess.TransferCancel = nil
+		sess.TransferCtx = nil
+	}()
+
 	for chunk := range receiver.Receive() {
+		select {
+		case <-sess.TransferCtx.Done():
+			log.Printf("[CTRL] transfer aborted by ABOR")
+			tcpctrl.WriteReply(conn, tcpctrl.ReplyTransferAborted, "Transfer aborted.")
+			cleanupDataConn(sess)
+			return
+		default:
+		}
 		if _, err := file.Write(chunk); err != nil {
 			log.Printf("[CTRL] write error: %v", err)
 			receiver.Close()
@@ -499,7 +560,22 @@ func handleSTOU(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, fmt.Sprintf("Opening data connection for %s.", uniqueName))
 
+	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
+	defer func() {
+		sess.TransferCancel()
+		sess.TransferCancel = nil
+		sess.TransferCtx = nil
+	}()
+
 	for chunk := range receiver.Receive() {
+		select {
+		case <-sess.TransferCtx.Done():
+			log.Printf("[CTRL] transfer aborted by ABOR")
+			tcpctrl.WriteReply(conn, tcpctrl.ReplyTransferAborted, "Transfer aborted.")
+			cleanupDataConn(sess)
+			return
+		default:
+		}
 		if _, err := file.Write(chunk); err != nil {
 			log.Printf("[CTRL] write error: %v", err)
 			receiver.Close()
@@ -529,6 +605,41 @@ func handleHASH(conn net.Conn, sess *session.Session, root string, args string) 
 		return
 	}
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileStatus, fmt.Sprintf("SHA-256 0-%s %s", hash, args))
+}
+
+func handleRNFR(conn net.Conn, sess *session.Session, root string, args string) {
+	if args == "" {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "RNFR requires a filename.")
+		return
+	}
+	if err := fs.RenameFrom(root, sess, args); err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "File not found.")
+		return
+	}
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyPendingRNTO, "File exists, ready for RNTO.")
+}
+
+func handleRNTO(conn net.Conn, sess *session.Session, root string, args string) {
+	if sess.RnfrPath == "" {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "RNFR required first.")
+		return
+	}
+	if args == "" {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "RNTO requires a filename.")
+		return
+	}
+	if err := fs.RenameTo(root, sess, args); err != nil {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Rename failed.")
+		return
+	}
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileActionOK, "Rename successful.")
+}
+
+func handleABOR(conn net.Conn, sess *session.Session, root string, args string) {
+	if sess.TransferCancel != nil {
+		sess.TransferCancel()
+	}
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "ABOR successful.")
 }
 
 func handleMDTM(conn net.Conn, sess *session.Session, root string, args string) {
