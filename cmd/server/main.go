@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"hybrid-ftp/internal/session"
@@ -34,12 +35,18 @@ func main() {
 	}
 	log.Printf("[CTRL] server listening on %s, root=%s", *ctrlPort, *rootDir)
 
+	var wg sync.WaitGroup
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
 		log.Printf("[CTRL] shutting down...")
 		listener.Close()
+		for _, s := range mgr.List() {
+			tcpctrl.WriteReply(s.Conn, 421, "Service not available, closing.")
+			s.Cancel()
+		}
 	}()
 
 	for {
@@ -48,8 +55,15 @@ func main() {
 			log.Printf("[CTRL] accept error: %v", err)
 			break
 		}
-		go handleSession(conn, mgr, *rootDir, *usersFile)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			handleSession(conn, mgr, *rootDir, *usersFile)
+		}()
 	}
+
+	wg.Wait()
+	log.Printf("[CTRL] server stopped.")
 }
 
 func handleSession(conn net.Conn, mgr *session.Manager, root, usersPath string) {
