@@ -68,6 +68,38 @@ func TestUnregister(t *testing.T) {
 	}
 }
 
+func TestList(t *testing.T) {
+	m := NewManager()
+	conn1, _ := net.Pipe()
+	defer conn1.Close()
+	conn2, _ := net.Pipe()
+	defer conn2.Close()
+
+	s1 := m.Register(conn1)
+	s2 := m.Register(conn2)
+
+	list := m.List()
+	if len(list) != 2 {
+		t.Fatalf("List() returned %d sessions, want 2", len(list))
+	}
+
+	found := map[uint32]bool{}
+	for _, s := range list {
+		found[s.ID] = true
+	}
+	if !found[s1.ID] || !found[s2.ID] {
+		t.Error("List() should contain both registered sessions")
+	}
+}
+
+func TestList_Empty(t *testing.T) {
+	m := NewManager()
+	list := m.List()
+	if len(list) != 0 {
+		t.Errorf("List() on empty manager returned %d sessions", len(list))
+	}
+}
+
 func TestConcurrentAccess(t *testing.T) {
 	m := NewManager()
 	var wg sync.WaitGroup

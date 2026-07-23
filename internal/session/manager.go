@@ -8,15 +8,20 @@ import (
 )
 
 type Session struct {
-	ID            uint32
-	Conn          net.Conn
-	Username      string
-	Authenticated bool
-	CWD           string
-	DataConn      *net.UDPConn
-	TransferType  byte
-	Ctx           context.Context
-	Cancel        context.CancelFunc
+	ID             uint32
+	Conn           net.Conn
+	Username       string
+	Authenticated  bool
+	CWD            string
+	DataConn       *net.UDPConn
+	DataMode       string
+	DataAddr       *net.UDPAddr
+	TransferType   byte
+	RnfrPath       string
+	TransferCtx    context.Context
+	TransferCancel context.CancelFunc
+	Ctx            context.Context
+	Cancel         context.CancelFunc
 }
 
 type Manager struct {
@@ -74,4 +79,15 @@ func (m *Manager) Get(id uint32) (*Session, bool) {
 
 	s, ok := m.registry[id]
 	return s, ok
+}
+
+func (m *Manager) List() []*Session {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	sessions := make([]*Session, 0, len(m.registry))
+	for _, s := range m.registry {
+		sessions = append(sessions, s)
+	}
+	return sessions
 }
