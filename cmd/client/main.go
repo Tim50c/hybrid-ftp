@@ -94,7 +94,7 @@ func main() {
 			continue
 		}
 
-		if cmd != tcpctrl.CmdPORT && cmd != tcpctrl.CmdHASH {
+		if cmd != tcpctrl.CmdPORT && cmd != tcpctrl.CmdHASH && cmd != tcpctrl.CmdLIST && cmd != tcpctrl.CmdRETR && cmd != tcpctrl.CmdSTOR {
 			if _, err := io.WriteString(conn, line+"\r\n"); err != nil {
 				log.Fatalf("write error: %v", err)
 			}
@@ -316,6 +316,7 @@ func handleHASH(conn net.Conn, filename string) {
 }
 
 func handleList(conn net.Conn) {
+	io.WriteString(conn, "LIST\r\n")
 	reply, _ := tcpctrl.ReadLine(conn)
 	fmt.Println(reply)
 	if !strings.HasPrefix(reply, "150") {
@@ -359,6 +360,7 @@ func handleList(conn net.Conn) {
 
 func handleRETR(conn net.Conn, filename string) {
 	if filename == "" {
+		io.WriteString(conn, "RETR\r\n")
 		reply, _ := tcpctrl.ReadLine(conn)
 		if reply != "" {
 			fmt.Println(reply)
@@ -366,6 +368,7 @@ func handleRETR(conn net.Conn, filename string) {
 		return
 	}
 
+	io.WriteString(conn, "RETR "+filename+"\r\n")
 	reply, _ := tcpctrl.ReadLine(conn)
 	fmt.Println(reply)
 	if !strings.HasPrefix(reply, "150") {
@@ -423,6 +426,7 @@ func handleRETR(conn net.Conn, filename string) {
 
 func handleSTOR(conn net.Conn, filename string) {
 	if filename == "" {
+		io.WriteString(conn, "STOR\r\n")
 		reply, _ := tcpctrl.ReadLine(conn)
 		if reply != "" {
 			fmt.Println(reply)
@@ -430,6 +434,7 @@ func handleSTOR(conn net.Conn, filename string) {
 		return
 	}
 
+	io.WriteString(conn, "STOR "+filename+"\r\n")
 	reply, _ := tcpctrl.ReadLine(conn)
 	fmt.Println(reply)
 	if !strings.HasPrefix(reply, "150") {
