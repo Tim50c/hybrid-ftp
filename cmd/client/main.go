@@ -87,6 +87,13 @@ func main() {
 
 		cmd, _ := tcpctrl.ParseCommand(line)
 
+		isDataCmd := cmd == tcpctrl.CmdLIST || cmd == tcpctrl.CmdRETR || cmd == tcpctrl.CmdSTOR
+		if isDataCmd && connDataMode == modeNone {
+			fmt.Println("Use PASV or PORT first.")
+			fmt.Print("ftp> ")
+			continue
+		}
+
 		if cmd != tcpctrl.CmdPORT && cmd != tcpctrl.CmdHASH {
 			if _, err := io.WriteString(conn, line+"\r\n"); err != nil {
 				log.Fatalf("write error: %v", err)
@@ -111,29 +118,14 @@ func main() {
 			}
 
 		case tcpctrl.CmdLIST:
-			if connDataMode == modeNone {
-				fmt.Println("Use PASV or PORT first.")
-				fmt.Print("ftp> ")
-				continue
-			}
 			ensurePASV(conn)
 			handleList(conn)
 
 		case tcpctrl.CmdRETR:
-			if connDataMode == modeNone {
-				fmt.Println("Use PASV or PORT first.")
-				fmt.Print("ftp> ")
-				continue
-			}
 			ensurePASV(conn)
 			handleRETR(conn, strings.TrimSpace(line[5:]))
 
 		case tcpctrl.CmdSTOR:
-			if connDataMode == modeNone {
-				fmt.Println("Use PASV or PORT first.")
-				fmt.Print("ftp> ")
-				continue
-			}
 			ensurePASV(conn)
 			handleSTOR(conn, strings.TrimSpace(line[5:]))
 
