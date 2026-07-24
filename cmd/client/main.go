@@ -119,30 +119,30 @@ func main() {
 
 		case tcpctrl.CmdLIST:
 			ensurePASV(conn)
-			handleList(conn)
+			handleList(conn, strings.TrimSpace(line[4:]))
 
 		case tcpctrl.CmdRETR:
 			ensurePASV(conn)
-			handleRETR(conn, strings.TrimSpace(line[5:]))
+			handleRETR(conn, strings.TrimSpace(line[4:]))
 
 		case tcpctrl.CmdSTOR:
 			ensurePASV(conn)
-			handleSTOR(conn, strings.TrimSpace(line[5:]))
+			handleSTOR(conn, strings.TrimSpace(line[4:]))
 
-	case tcpctrl.CmdNLST:
-		ensurePASV(conn)
-		handleNLST(conn, strings.TrimSpace(line[5:]))
+		case tcpctrl.CmdNLST:
+			ensurePASV(conn)
+			handleNLST(conn, strings.TrimSpace(line[4:]))
 
-	case tcpctrl.CmdSTOU:
-		ensurePASV(conn)
-		handleSTOU(conn, strings.TrimSpace(line[5:]))
+		case tcpctrl.CmdSTOU:
+			ensurePASV(conn)
+			handleSTOU(conn, strings.TrimSpace(line[4:]))
 
-	case tcpctrl.CmdAPPE:
-		ensurePASV(conn)
-		handleAPPE(conn, strings.TrimSpace(line[5:]))
+		case tcpctrl.CmdAPPE:
+			ensurePASV(conn)
+			handleAPPE(conn, strings.TrimSpace(line[4:]))
 
-	case tcpctrl.CmdHASH:
-		handleHASH(conn, strings.TrimSpace(line[5:]))
+		case tcpctrl.CmdHASH:
+			handleHASH(conn, strings.TrimSpace(line[4:]))
 
 		case tcpctrl.CmdQUIT:
 			reply, _ := tcpctrl.ReadLine(conn)
@@ -359,8 +359,12 @@ func parseHASHReply(reply string) string {
 	return reply[start:end]
 }
 
-func handleList(conn net.Conn) {
-	io.WriteString(conn, "LIST\r\n")
+func handleList(conn net.Conn, path string) {
+	if path == "" {
+		io.WriteString(conn, "LIST\r\n")
+	} else {
+		io.WriteString(conn, "LIST "+path+"\r\n")
+	}
 	reply, _ := tcpctrl.ReadLine(conn)
 	fmt.Println(reply)
 	if !strings.HasPrefix(reply, "150") {
@@ -604,7 +608,7 @@ func handleSTOU(conn net.Conn, filename string) {
 		return
 	}
 
-	io.WriteString(conn, "STOU\r\n")
+	io.WriteString(conn, "STOU "+filename+"\r\n")
 	reply, _ := tcpctrl.ReadLine(conn)
 	fmt.Println(reply)
 	if !strings.HasPrefix(reply, "150") {

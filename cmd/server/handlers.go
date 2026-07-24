@@ -603,7 +603,11 @@ func handleAPPE(conn net.Conn, sess *session.Session, root string, args string) 
 }
 
 func handleSTOU(conn net.Conn, sess *session.Session, root string, args string) {
-	uniqueName := fs.GenerateUniqueName("upload.dat")
+	nameHint := args
+	if nameHint == "" {
+		nameHint = "upload.dat"
+	}
+	uniqueName := fs.GenerateUniqueName(nameHint)
 	fullPath, err := fs.ResolveSafe(root, sess, uniqueName)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot create unique file.")

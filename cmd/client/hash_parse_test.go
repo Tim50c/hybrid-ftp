@@ -433,8 +433,8 @@ func TestHandleSTOU_WritesCommand(t *testing.T) {
 		handleSTOU(conn, filename)
 	})
 
-	if !strings.Contains(conn.writeBuf.String(), "STOU\r\n") {
-		t.Errorf("expected STOU command, got %q", conn.writeBuf.String())
+	if !strings.Contains(conn.writeBuf.String(), "STOU "+filename+"\r\n") {
+		t.Errorf("expected STOU %s command, got %q", filename, conn.writeBuf.String())
 	}
 	if !strings.Contains(out, "150 Opening data connection") {
 		t.Errorf("expected 150 reply echo, got %q", out)
