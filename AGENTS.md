@@ -57,7 +57,7 @@ Hybrid FTP decouples the FTP control plane (TCP) from the data plane (Custom Rel
 4. **Concurrency safety**: All shared maps protected by `sync.RWMutex`. Channels used for cross-goroutine signaling. Context cancellation for graceful shutdown.
 5. **No code generation without reading**: Before writing any file, read the existing code in the target package first to match conventions.
 6. **Test files**: Unit tests in `*_test.go` alongside source. Integration tests in `test/` directory.
-7. **Commit messages**: Format as `[scope] brief description`. Examples: `[ctrl] add PORT command parsing`, `[rdt] implement BBR PROBE_BW state`.
+7. **Commit messages**: Format as `type(scope): short description`. Examples: `feat(ctrl): add PORT command parsing`, `feat(rdt): implement BBR PROBE_BW state`.
 
 ---
 
