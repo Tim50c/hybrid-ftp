@@ -303,16 +303,48 @@ func handleHASH(conn net.Conn, filename string) {
 	reply, _ := tcpctrl.ReadLine(conn)
 	fmt.Println(reply)
 
-	if !strings.HasPrefix(reply, "213 ") {
-		return
+	if msg := evalHASHReply(localHash, reply); msg != "" {
+		fmt.Println(msg)
 	}
+}
 
-	remoteHash := strings.TrimSpace(reply[4:])
-	if strings.EqualFold(localHash, remoteHash) {
-		fmt.Println("Hashes match - file integrity verified.")
-	} else {
-		fmt.Printf("MISMATCH!\n  Local:  %s\n  Remote: %s\n", localHash, remoteHash)
+// evalHASHReply returns the message the client should print after the server
+// has replied to a HASH command, or "" if the reply is not a 213 (no message).
+// Splitting this from handleHASH makes the matching/parsing logic directly
+// testable without a net.Conn.
+func evalHASHReply(localHash, reply string) string {
+	if !strings.HasPrefix(reply, "213 ") {
+		return ""
 	}
+	remoteHash := parseHASHReply(reply)
+	if remoteHash == "" {
+		return "HASH: could not parse server reply."
+	}
+	if strings.EqualFold(localHash, remoteHash) {
+		return "Hashes match - file integrity verified."
+	}
+	return fmt.Sprintf("MISMATCH!\n  Local:  %s\n  Remote: %s", localHash, remoteHash)
+}
+
+func parseHASHReply(reply string) string {
+	const prefix = "SHA-256 0-"
+	idx := strings.Index(reply, prefix)
+	if idx < 0 {
+		return ""
+	}
+	start := idx + len(prefix)
+	end := start
+	for end < len(reply) && end-start < 64 {
+		c := reply[end]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			break
+		}
+		end++
+	}
+	if end-start != 64 {
+		return ""
+	}
+	return reply[start:end]
 }
 
 func handleList(conn net.Conn) {
