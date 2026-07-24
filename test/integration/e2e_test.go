@@ -526,6 +526,187 @@ func TestE2E_SIZE_MDTM(t *testing.T) {
 	fc.sendAndRead(t, "QUIT")
 }
 
+func TestE2E_RNFR_RNTO(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	os.WriteFile(filepath.Join(rootDir, "original.txt"), []byte("data"), 0644)
+
+	if r := fc.sendAndRead(t, "RNFR original.txt"); !strings.HasPrefix(r, "350") {
+		t.Fatalf("RNFR: expected 350, got %s", r)
+	}
+	if r := fc.sendAndRead(t, "RNTO renamed.txt"); !strings.HasPrefix(r, "250") {
+		t.Errorf("RNTO: expected 250, got %s", r)
+	}
+	if r := fc.sendAndRead(t, "RETR original.txt"); !strings.HasPrefix(r, "550") {
+		t.Errorf("RETR old name: expected 550, got %s", r)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_STOU(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	reply := fc.sendAndRead(t, "PASV")
+	if !strings.HasPrefix(reply, "227") {
+		t.Fatalf("PASV: expected 227, got %s", reply)
+	}
+	host, port, _ := parsePASVReply(reply)
+
+	r := fc.sendAndRead(t, "STOU")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("STOU: expected 150, got %s", r)
+	}
+
+	addr := fmt.Sprintf("%s:%d", host, port)
+	udpAddr, _ := net.ResolveUDPAddr("udp", addr)
+	udpConn, _ := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
+	defer udpConn.Close()
+
+	sender := rdt.NewSender(udpConn, 1)
+	sender.Connect(udpAddr)
+	sender.Send([]byte("unique upload"))
+	sender.Close()
+
+	time.Sleep(500 * time.Millisecond)
+	r2 := fc.readReply(t)
+	if !strings.HasPrefix(r2, "257") {
+		t.Errorf("STOU completion: expected 257, got %s", r2)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_APPE(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	os.WriteFile(filepath.Join(rootDir, "append.txt"), []byte("hello"), 0644)
+
+	reply := fc.sendAndRead(t, "PASV")
+	host, port, _ := parsePASVReply(reply)
+
+	r := fc.sendAndRead(t, "APPE append.txt")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("APPE: expected 150, got %s", r)
+	}
+
+	addr := fmt.Sprintf("%s:%d", host, port)
+	udpAddr, _ := net.ResolveUDPAddr("udp", addr)
+	udpConn, _ := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
+	defer udpConn.Close()
+
+	sender := rdt.NewSender(udpConn, 1)
+	sender.Connect(udpAddr)
+	sender.Send([]byte(" world"))
+	sender.Close()
+
+	time.Sleep(500 * time.Millisecond)
+	fc.readReply(t)
+
+	data, _ := os.ReadFile(filepath.Join(rootDir, "append.txt"))
+	if string(data) != "hello world" {
+		t.Errorf("append result = %q, want 'hello world'", string(data))
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_HASH(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	os.WriteFile(filepath.Join(rootDir, "hash.txt"), []byte("hello\n"), 0644)
+
+	r := fc.sendAndRead(t, "HASH hash.txt")
+	if !strings.HasPrefix(r, "213") {
+		t.Errorf("HASH: expected 213, got %s", r)
+	}
+	if !strings.Contains(r, "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03") {
+		t.Errorf("HASH: wrong hash in %s", r)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_MODE(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	if r := fc.sendAndRead(t, "MODE S"); !strings.HasPrefix(r, "200") {
+		t.Errorf("MODE S: expected 200, got %s", r)
+	}
+	if r := fc.sendAndRead(t, "MODE B"); !strings.HasPrefix(r, "504") {
+		t.Errorf("MODE B: expected 504, got %s", r)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_NOOP_HELP(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	if r := fc.sendAndRead(t, "NOOP"); !strings.HasPrefix(r, "200") {
+		t.Errorf("NOOP: expected 200, got %s", r)
+	}
+	if r := fc.sendAndRead(t, "HELP"); !strings.HasPrefix(r, "214") {
+		t.Errorf("HELP: expected 214, got %s", r)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
 func doRDTDownloadString(t *testing.T, host string, port int) string {
 	data, err := doRDTDownload(t, host, port)
 	if err != nil {
