@@ -913,6 +913,113 @@ func parsePASVReply(reply string) (string, int, error) {
 	return host, port, nil
 }
 
+func TestE2E_BinaryFileTransfer(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	payloadSize := 100000
+	payload := make([]byte, payloadSize)
+	for i := range payload {
+		payload[i] = byte(i % 256)
+	}
+
+	os.WriteFile(filepath.Join(rootDir, "binary.bin"), payload, 0644)
+
+	reply := fc.sendAndRead(t, "PASV")
+	host, port, _ := parsePASVReply(reply)
+
+	r := fc.sendAndRead(t, "RETR binary.bin")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("expected 150, got %s", r)
+	}
+
+	data, err := doRDTDownload(t, host, port)
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+
+	if !bytes.Equal(data, payload) {
+		t.Errorf("binary content mismatch: got %d bytes, expected %d bytes", len(data), len(payload))
+		firstDiff := findFirstDiff(data, payload)
+		t.Errorf("first diff at byte %d: expected 0x%02x, got 0x%02x", firstDiff, payload[firstDiff], data[firstDiff])
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	fc.readReply(t)
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_STOR_Binary(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	payloadSize := 50000
+	payload := make([]byte, payloadSize)
+	for i := range payload {
+		payload[i] = byte((i * 7 + 13) % 256)
+	}
+
+	reply := fc.sendAndRead(t, "PASV")
+	host, port, _ := parsePASVReply(reply)
+
+	r := fc.sendAndRead(t, "STOR uploaded_binary.bin")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("expected 150, got %s", r)
+	}
+
+	addr := fmt.Sprintf("%s:%d", host, port)
+	udpAddr, _ := net.ResolveUDPAddr("udp", addr)
+	udpConn, _ := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
+	defer udpConn.Close()
+
+	sender := rdt.NewSender(udpConn, 1)
+	sender.Connect(udpAddr)
+	sender.Send(payload)
+	time.Sleep(200 * time.Millisecond)
+	sender.Close()
+
+	time.Sleep(500 * time.Millisecond)
+	fc.readReply(t)
+
+	saved, _ := os.ReadFile(filepath.Join(rootDir, "uploaded_binary.bin"))
+	if !bytes.Equal(saved, payload) {
+		t.Errorf("STOR binary mismatch: got %d bytes, expected %d bytes", len(saved), len(payload))
+		firstDiff := findFirstDiff(saved, payload)
+		t.Errorf("first diff at byte %d: expected 0x%02x, got 0x%02x", firstDiff, payload[firstDiff], saved[firstDiff])
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func findFirstDiff(a, b []byte) int {
+	minLen := len(a)
+	if len(b) < minLen {
+		minLen = len(b)
+	}
+	for i := 0; i < minLen; i++ {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return minLen
+}
+
 func doRDTDownload(t *testing.T, host string, port int) ([]byte, error) {
 	t.Helper()
 	addr := fmt.Sprintf("%s:%d", host, port)

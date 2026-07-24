@@ -176,8 +176,10 @@ func (s *Sender) Accept() error {
 }
 
 func (s *Sender) Send(data []byte) error {
+	copied := make([]byte, len(data))
+	copy(copied, data)
 	select {
-	case s.outbox <- data:
+	case s.outbox <- copied:
 		return nil
 	case <-s.done:
 		return fmt.Errorf("sender closed")
