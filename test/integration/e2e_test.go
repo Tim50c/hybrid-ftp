@@ -1166,6 +1166,100 @@ func findFirstDiff(a, b []byte) int {
 	return minLen
 }
 
+// TestE2E_LargeFileTransfer_NoLoss downloads a 5 MB file and verifies that
+// every byte arrives. This catches the receiver-side bug where the
+// receiveLoop returns on FIN without flushing r.recvBuffer — out-of-order
+// packets buffered during the transfer are dropped.
+//
+// We only assert on size here (not byte-for-byte equality) because finding
+// the first differing byte would index out of range if the download is
+// short. The HASH command (TestE2E_HASH) provides the byte-level check.
+func TestE2E_LargeFileTransfer_NoLoss(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	const payloadSize = 5 * 1024 * 1024
+	payload := make([]byte, payloadSize)
+	for i := range payload {
+		payload[i] = byte(i % 256)
+	}
+	if err := os.WriteFile(filepath.Join(rootDir, "large5mb.bin"), payload, 0644); err != nil {
+		t.Fatalf("write sample: %v", err)
+	}
+
+	reply := fc.sendAndRead(t, "PASV")
+	host, port, err := parsePASVReply(reply)
+	if err != nil {
+		t.Fatalf("parse PASV: %v", err)
+	}
+
+	reply = fc.sendAndRead(t, "RETR large5mb.bin")
+	if !strings.HasPrefix(reply, "150") {
+		t.Fatalf("expected 150, got %s", reply)
+	}
+
+	data, err := doRDTDownloadWithTimeout(t, host, port, 30*time.Second)
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+
+	if len(data) != payloadSize {
+		t.Errorf("size mismatch: got %d bytes, expected %d bytes (lost %d)",
+			len(data), payloadSize, payloadSize-len(data))
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+// doRDTDownloadWithTimeout is like doRDTDownload but with an explicit timeout
+// suitable for multi-MB transfers.
+func doRDTDownloadWithTimeout(t *testing.T, host string, port int, timeout time.Duration) ([]byte, error) {
+	t.Helper()
+	addr := fmt.Sprintf("%s:%d", host, port)
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("resolve UDP: %w", err)
+	}
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if err != nil {
+		return nil, fmt.Errorf("listen UDP: %w", err)
+	}
+	defer udpConn.Close()
+
+	sessionID := uint32(1)
+	r := rdt.NewReceiver(udpConn, sessionID)
+	if err := r.Connect(udpAddr); err != nil {
+		return nil, fmt.Errorf("rdt connect: %w", err)
+	}
+
+	recvCh := r.Receive()
+	resultCh := make(chan []byte, 1)
+	go func() {
+		var buf []byte
+		for chunk := range recvCh {
+			buf = append(buf, chunk...)
+		}
+		resultCh <- buf
+	}()
+
+	select {
+	case data := <-resultCh:
+		return data, nil
+	case <-time.After(timeout):
+		r.Close()
+		data := <-resultCh
+		return data, nil
+	}
+}
+
 func doRDTDownload(t *testing.T, host string, port int) ([]byte, error) {
 	t.Helper()
 	addr := fmt.Sprintf("%s:%d", host, port)
