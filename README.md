@@ -204,7 +204,49 @@ go run ./cmd/server -ctrl :2121 -root /tmp/hybrid-ftp -users users.conf
 go run ./cmd/client -host 127.0.0.1 -ctrl 2121
 ```
 
-#### 3. Login and Navigation
+#### 3. Data Mode Selection
+
+After login, the client has no mode set. Data commands will prompt you to pick one:
+
+```
+ftp> LIST
+Use PASV or PORT first.
+ftp> PASV
+227 Entering Passive Mode (127,0,0,1,xxx,xxx).   # now in PASV mode
+ftp> LIST
+150 Opening data connection for directory listing. # works
+...
+```
+
+PASV mode persists — subsequent LIST/RETR/STOR auto-send PASV when needed:
+
+```
+ftp> LIST
+227 Entering Passive Mode (127,0,0,1,xxx,xxx).   # auto-PASV
+-rw-r--r--     ...
+ftp> RETR hello.txt
+227 Entering Passive Mode (127,0,0,1,xxx,xxx).   # auto-PASV
+150 Opening data connection for hello.txt (21 bytes).
+...
+```
+
+Switch to PORT mode and back:
+
+```
+ftp> PORT 127,0,0,1,200,0
+200 PORT command successful.                      # now in PORT mode
+ftp> RETR hello.txt
+150 Opening data connection for hello.txt (21 bytes).
+...
+ftp> PASV
+227 Entering Passive Mode (127,0,0,1,xxx,xxx).   # back to PASV mode
+ftp> LIST                                            # auto-PASV resumes
+...
+```
+
+PORT sockets are single-use — re-send `PORT` before each transfer in active mode.
+
+#### 4. Login and Navigation
 
 ```
 ftp> USER admin
@@ -221,48 +263,45 @@ ftp> CDUP
 250 Directory changed to parent.
 ```
 
-#### 4. Directory Operations
-
-```
-ftp> MKD newdir
-257 "/newdir" created.
-ftp> RMD newdir
-250 "/newdir" removed.
-ftp> LIST
-227 Entering Passive Mode (127,0,0,1,xxx,xxx)
-150 Opening data connection for directory listing.
-226 Directory listing complete.
-```
-
-#### 5. Download a File (RETR)
+#### 5. Directory Operations
 
 ```
 ftp> PASV
-227 Entering Passive Mode (127,0,0,1,xxx,xxx)
+227 Entering Passive Mode (127,0,0,1,xxx,xxx).
+ftp> MKD newdir
+257 "/newdir" created.
+ftp> LIST
+150 Opening data connection for directory listing.
+226 Directory listing complete.
+ftp> RMD newdir
+250 "/newdir" removed.
+```
+
+#### 6. Download a File (RETR)
+
+```
+ftp> PASV                                           # skip if already in PASV mode
 ftp> RETR hello.txt
 150 Opening data connection for hello.txt (21 bytes).
 ██████████████████████████████ 100% | 2.0 MiB/s | ETA: 00:00
 226 Transfer complete.
 ```
 
-#### 6. Upload a File (STOR)
+#### 7. Upload a File (STOR)
 
 First, create a local file:
 ```bash
-# In the client directory
 echo "uploaded from client" > upload.txt
 ```
 
 ```
-ftp> PASV
-227 Entering Passive Mode (127,0,0,1,xxx,xxx)
 ftp> STOR upload.txt
 150 Opening data connection for upload.txt.
 ██████████████████████████████ 100% | 1.8 MiB/s | ETA: 00:00
 226 Transfer complete.
 ```
 
-#### 7. Hash Verification
+#### 8. Hash Verification
 
 ```
 ftp> HASH hello.txt
@@ -270,7 +309,7 @@ ftp> HASH hello.txt
 Hashes match - file integrity verified.
 ```
 
-#### 8. PORT Mode (Active)
+#### 9. PORT Mode (Active)
 
 ```
 ftp> PORT 127,0,0,1,200,0
@@ -279,12 +318,19 @@ ftp> RETR hello.txt
 150 Opening data connection for hello.txt (21 bytes).
 ██████████████████████████████ 100% | 2.0 MiB/s | ETA: 00:00
 226 Transfer complete.
+
+ftp> RETR data.bin                                  # PORT used up — need re-PORT
+no PORT socket; send PORT first
+ftp> PORT 127,0,0,1,200,1
+200 PORT command successful.
+ftp> RETR data.bin
+150 Opening data connection for data.bin.
+...
 ```
 
-#### 9. Large File Transfer (Progress Bar)
+#### 10. Large File Transfer (Progress Bar)
 
 ```bash
-# Create a test file
 dd if=/dev/urandom of=/tmp/hybrid-ftp/bigfile.bin bs=1M count=50
 ```
 
@@ -294,11 +340,18 @@ ftp> RETR bigfile.bin
 ████████████████████████░░░░░░░░ 65% | 3.5 MiB/s | ETA: 00:05
 ```
 
-#### 10. Concurrent Sessions
+#### 11. Concurrent Sessions
 
-Open two terminals and run the client in each. Both can authenticate and transfer files simultaneously — each session gets its own UDP data port, and transfers proceed independently.
+Open two terminals and run the client in each. Each sets PASV (or PORT) independently and transfers proceed in parallel:
 
-#### 11. Local Client Commands
+```
+Terminal 1:                    Terminal 2:
+ftp> PASV                      ftp> PASV
+ftp> RETR hello.txt            ftp> RETR data.bin
+226 Transfer complete.         226 Transfer complete.
+```
+
+#### 12. Local Client Commands
 
 ```
 ftp> lpwd
