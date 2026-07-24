@@ -38,7 +38,7 @@ func setupDataSender(sess *session.Session) (*rdt.Sender, error) {
 			sess.DataConn.Close()
 		}
 		sess.DataConn = udpConn
-		sender := rdt.NewSender(udpConn, sess.ID)
+		sender := rdt.NewSender(udpConn, 1)
 		if err := sender.Connect(sess.DataAddr); err != nil {
 			return nil, fmt.Errorf("rdt connect: %w", err)
 		}
@@ -47,7 +47,7 @@ func setupDataSender(sess *session.Session) (*rdt.Sender, error) {
 	if sess.DataConn == nil {
 		return nil, fmt.Errorf("use PASV or PORT first")
 	}
-	sender := rdt.NewSender(sess.DataConn, sess.ID)
+	sender := rdt.NewSender(sess.DataConn, 1)
 	if err := sender.Accept(); err != nil {
 		return nil, fmt.Errorf("rdt accept: %w", err)
 	}
@@ -64,7 +64,7 @@ func setupDataReceiver(sess *session.Session) (*rdt.Receiver, error) {
 			sess.DataConn.Close()
 		}
 		sess.DataConn = udpConn
-		receiver := rdt.NewReceiver(udpConn, sess.ID)
+		receiver := rdt.NewReceiver(udpConn, 1)
 		if err := receiver.Connect(sess.DataAddr); err != nil {
 			return nil, fmt.Errorf("rdt connect: %w", err)
 		}
@@ -73,7 +73,7 @@ func setupDataReceiver(sess *session.Session) (*rdt.Receiver, error) {
 	if sess.DataConn == nil {
 		return nil, fmt.Errorf("use PASV or PORT first")
 	}
-	receiver := rdt.NewReceiver(sess.DataConn, sess.ID)
+	receiver := rdt.NewReceiver(sess.DataConn, 1)
 	if err := receiver.Accept(); err != nil {
 		return nil, fmt.Errorf("rdt accept: %w", err)
 	}
@@ -219,12 +219,13 @@ func handleLIST(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 	listing := fs.FormatList(infos)
 
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, "Opening data connection for directory listing.")
+
 	serverSender, err := setupDataSender(sess)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
 		return
 	}
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, "Opening data connection for directory listing.")
 
 	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
 	defer func() {
@@ -257,13 +258,14 @@ func handleRETR(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 	defer file.Close()
 
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK,
+		fmt.Sprintf("Opening data connection for %s (%d bytes).", args, info.Size()))
+
 	serverSender, err := setupDataSender(sess)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
 		return
 	}
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK,
-		fmt.Sprintf("Opening data connection for %s (%d bytes).", args, info.Size()))
 
 	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
 	defer func() {
@@ -322,13 +324,14 @@ func handleSTOR(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 	defer file.Close()
 
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK,
+		fmt.Sprintf("Opening data connection for %s.", args))
+
 	serverReceiver, err := setupDataReceiver(sess)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
 		return
 	}
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK,
-		fmt.Sprintf("Opening data connection for %s.", args))
 
 	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
 	defer func() {
@@ -492,12 +495,13 @@ func handleNLST(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 	listing := strings.Join(names, "\r\n") + "\r\n"
 
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, "Opening data connection for name list.")
+
 	sender, err := setupDataSender(sess)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
 		return
 	}
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, "Opening data connection for name list.")
 
 	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
 	defer func() {
@@ -529,12 +533,13 @@ func handleAPPE(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 	defer file.Close()
 
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, fmt.Sprintf("Opening data connection for %s.", args))
+
 	receiver, err := setupDataReceiver(sess)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
 		return
 	}
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, fmt.Sprintf("Opening data connection for %s.", args))
 
 	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
 	defer func() {
@@ -579,12 +584,13 @@ func handleSTOU(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 	defer file.Close()
 
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, fmt.Sprintf("Opening data connection for %s.", uniqueName))
+
 	receiver, err := setupDataReceiver(sess)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
 		return
 	}
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, fmt.Sprintf("Opening data connection for %s.", uniqueName))
 
 	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
 	defer func() {

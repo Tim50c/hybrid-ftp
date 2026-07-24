@@ -10,10 +10,6 @@ import (
 	"time"
 )
 
-const (
-	fixedCWND = 28000
-)
-
 type senderState int
 
 const (
@@ -24,12 +20,13 @@ const (
 )
 
 type packetRecord struct {
-	data          []byte
-	sentAt        time.Time
-	retransCount  int
-	seq           uint32
-	length        uint32
-	done          bool
+	data             []byte
+	sentAt           time.Time
+	retransCount     int
+	seq              uint32
+	length           uint32
+	done             bool
+	deliveredAtSend  uint64
 }
 
 type Sender struct {
@@ -40,10 +37,10 @@ type Sender struct {
 	state      senderState
 	sendBase   uint32
 	nextSeqNum uint32
-	windowSize uint32
 	recvWindow uint16
 	inflight   map[uint32]*packetRecord
 	timers     *TimerManager
+	bbr        *BBR
 	outbox     chan []byte
 	ackCh      chan ackEvent
 	done       chan struct{}
@@ -60,9 +57,9 @@ func NewSender(conn *net.UDPConn, sessionID uint32) *Sender {
 		conn:       conn,
 		sessionID:  sessionID,
 		state:      sendClosed,
-		windowSize: fixedCWND,
 		recvWindow: 65535,
 		inflight:   make(map[uint32]*packetRecord),
+		bbr:        NewBBR(),
 		outbox:     make(chan []byte, 100),
 		ackCh:      make(chan ackEvent, 100),
 		done:       make(chan struct{}),
@@ -234,22 +231,6 @@ func (s *Sender) sendControl(seqNum, ackNum uint32, flags uint8) error {
 	return nil
 }
 
-func (s *Sender) effectiveWindow() uint32 {
-	w := s.windowSize
-	if uint32(s.recvWindow) < w {
-		w = uint32(s.recvWindow)
-	}
-	return w
-}
-
-func (s *Sender) inflightBytes() uint32 {
-	var total uint32
-	for _, r := range s.inflight {
-		total += r.length
-	}
-	return total
-}
-
 func (s *Sender) sendLoop() {
 	log.Printf("[RDT] sender loop started, session=%d", s.sessionID)
 	for {
@@ -270,8 +251,14 @@ func (s *Sender) sendLoop() {
 
 		offset := 0
 		for offset < len(data) {
+			end := offset + 1400
+			if end > len(data) {
+				end = len(data)
+			}
+			chunkLen := uint32(end - offset)
+
 			s.mu.Lock()
-			for s.inflightBytes() >= s.effectiveWindow() {
+			for !s.bbr.CanSend(chunkLen, s.recvWindow) {
 				s.mu.Unlock()
 				select {
 				case <-s.ackCh:
@@ -282,12 +269,7 @@ func (s *Sender) sendLoop() {
 				s.mu.Lock()
 			}
 
-			end := offset + 1400
-			if end > len(data) {
-				end = len(data)
-			}
 			chunk := data[offset:end]
-			chunkLen := uint32(len(chunk))
 
 			seq := s.nextSeqNum
 			s.nextSeqNum += chunkLen
@@ -310,14 +292,27 @@ func (s *Sender) sendLoop() {
 				return
 			}
 
+			s.bbr.OnSend(chunkLen)
+
 			s.inflight[seq] = &packetRecord{
-				data:   encoded,
-				seq:    seq,
-				length: chunkLen,
-				sentAt: time.Now(),
+				data:             encoded,
+				seq:              seq,
+				length:           chunkLen,
+				sentAt:           time.Now(),
+				deliveredAtSend:  s.bbr.GetDelivered(),
 			}
 			s.timers.Start(seq)
 			s.mu.Unlock()
+
+			if delay := s.bbr.PacingDelay(chunkLen); delay > 0 {
+				select {
+				case <-time.After(delay):
+				case <-s.done:
+					return
+				case <-s.errCh:
+					return
+				}
+			}
 
 			offset = end
 		}
@@ -393,6 +388,8 @@ func (s *Sender) processAck(ackNum uint32) {
 		if rec, ok := s.inflight[seq]; ok {
 			rec.done = true
 			s.timers.Cancel(seq)
+			rtt := time.Since(rec.sentAt)
+			s.bbr.OnACK(rec.length, rtt, rec.sentAt, rec.deliveredAtSend)
 			delete(s.inflight, seq)
 			seq += rec.length
 		} else {
@@ -414,6 +411,7 @@ func (s *Sender) onTimeout(seq uint32) {
 
 	rec.retransCount++
 	if rec.retransCount > maxRetransmits {
+		s.bbr.OnLoss(rec.length)
 		log.Printf("[RDT] max retransmits exceeded for seq=%d", seq)
 		s.sendControl(0, 0, FlagRST)
 		s.state = sendClosed

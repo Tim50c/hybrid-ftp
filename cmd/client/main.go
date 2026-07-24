@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"flag"
 	"fmt"
 	"io"
@@ -84,13 +85,18 @@ func main() {
 			continue
 		}
 
-		if _, err := io.WriteString(conn, line+"\r\n"); err != nil {
-			log.Fatalf("write error: %v", err)
-		}
-
 		cmd, _ := tcpctrl.ParseCommand(line)
 
+		if cmd != tcpctrl.CmdPORT && cmd != tcpctrl.CmdHASH {
+			if _, err := io.WriteString(conn, line+"\r\n"); err != nil {
+				log.Fatalf("write error: %v", err)
+			}
+		}
+
 		switch cmd {
+		case tcpctrl.CmdPORT:
+			handlePORT(conn)
+
 		case tcpctrl.CmdPASV:
 			reply, _ := tcpctrl.ReadLine(conn)
 			fmt.Println(reply)
@@ -111,6 +117,9 @@ func main() {
 
 		case tcpctrl.CmdSTOR:
 			handleSTOR(conn, strings.TrimSpace(line[5:]))
+
+		case tcpctrl.CmdHASH:
+			handleHASH(conn, strings.TrimSpace(line[5:]))
 
 		case tcpctrl.CmdQUIT:
 			reply, _ := tcpctrl.ReadLine(conn)
@@ -134,7 +143,16 @@ func main() {
 	}
 }
 
+type dataMode int
+
+const (
+	modePASV dataMode = iota
+	modePORT
+)
+
 var (
+	connDataMode    = modePASV
+	portUDPConn     *net.UDPConn
 	currentPASVHost string
 	currentPASVPort int
 )
@@ -165,6 +183,105 @@ func parsePASV(reply string) (string, int, error) {
 func setupPASVConnection(host string, port int) {
 	currentPASVHost = host
 	currentPASVPort = port
+}
+
+func prepareDataTransfer() (*net.UDPConn, func(), error) {
+	switch connDataMode {
+	case modePASV:
+		if _, err := net.ResolveUDPAddr("udp",
+			fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort)); err != nil {
+			return nil, nil, fmt.Errorf("PASV address: %w", err)
+		}
+		udpConn, err := net.ListenUDP("udp", nil)
+		if err != nil {
+			return nil, nil, fmt.Errorf("ListenUDP: %w", err)
+		}
+		cleanup := func() {
+			udpConn.Close()
+			currentPASVHost = ""
+			currentPASVPort = 0
+		}
+		return udpConn, cleanup, nil
+	case modePORT:
+		if portUDPConn == nil {
+			return nil, nil, fmt.Errorf("no PORT socket; use PORT first")
+		}
+		cleanup := func() {
+			portUDPConn.Close()
+			portUDPConn = nil
+			connDataMode = modePASV
+		}
+		return portUDPConn, cleanup, nil
+	default:
+		return nil, nil, fmt.Errorf("no data mode; use PASV or PORT first")
+	}
+}
+
+func handlePORT(conn net.Conn) {
+	ip4 := conn.LocalAddr().(*net.TCPAddr).IP.To4()
+	if ip4 == nil {
+		fmt.Println("PORT: IPv6 not supported")
+		return
+	}
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if err != nil {
+		fmt.Printf("PORT: %v\n", err)
+		return
+	}
+
+	localPort := udpConn.LocalAddr().(*net.UDPAddr).Port
+	p1, p2 := localPort/256, localPort%256
+	portCmd := fmt.Sprintf("PORT %d,%d,%d,%d,%d,%d",
+		ip4[0], ip4[1], ip4[2], ip4[3], p1, p2)
+
+	io.WriteString(conn, portCmd+"\r\n")
+	reply, _ := tcpctrl.ReadLine(conn)
+	fmt.Println(reply)
+
+	if strings.HasPrefix(reply, "200") {
+		connDataMode = modePORT
+		portUDPConn = udpConn
+	} else {
+		udpConn.Close()
+	}
+}
+
+func computeFileHash(filename string) (string, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return "", fmt.Errorf("open: %w", err)
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	buf := make([]byte, 64*1024)
+	if _, err := io.CopyBuffer(h, f, buf); err != nil {
+		return "", fmt.Errorf("hash: %w", err)
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+func handleHASH(conn net.Conn, filename string) {
+	localHash, err := computeFileHash(filename)
+	if err != nil {
+		fmt.Printf("HASH: %v\n", err)
+		return
+	}
+
+	io.WriteString(conn, "HASH "+filename+"\r\n")
+	reply, _ := tcpctrl.ReadLine(conn)
+	fmt.Println(reply)
+
+	if !strings.HasPrefix(reply, "213 ") {
+		return
+	}
+
+	remoteHash := strings.TrimSpace(reply[4:])
+	if strings.EqualFold(localHash, remoteHash) {
+		fmt.Println("Hashes match - file integrity verified.")
+	} else {
+		fmt.Printf("MISMATCH!\n  Local:  %s\n  Remote: %s\n", localHash, remoteHash)
+	}
 }
 
 func handleList(conn net.Conn) {
@@ -211,15 +328,29 @@ func handleRETR(conn net.Conn, filename string) {
 		return
 	}
 
-	udpAddr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
-	udpConn, _ := net.ListenUDP("udp", nil)
-	defer udpConn.Close()
+	udpConn, cleanup, err := prepareDataTransfer()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer cleanup()
 
 	sessionID := uint32(1)
 	receiver := rdt.NewReceiver(udpConn, sessionID)
-	if err := receiver.Connect(udpAddr); err != nil {
-		fmt.Printf("RDT connect error: %v\n", err)
-		return
+
+	switch connDataMode {
+	case modePASV:
+		udpAddr, _ := net.ResolveUDPAddr("udp",
+			fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
+		if err := receiver.Connect(udpAddr); err != nil {
+			fmt.Printf("RDT connect: %v\n", err)
+			return
+		}
+	case modePORT:
+		if err := receiver.Accept(); err != nil {
+			fmt.Printf("RDT accept: %v\n", err)
+			return
+		}
 	}
 
 	localFile, err := os.Create(filename)
@@ -230,14 +361,17 @@ func handleRETR(conn net.Conn, filename string) {
 	}
 	defer localFile.Close()
 
-	total := 0
+	progress := rdt.NewProgressBar(0)
 	for chunk := range receiver.Receive() {
-		n, _ := localFile.Write(chunk)
-		total += n
+		n, err := localFile.Write(chunk)
+		if err != nil {
+			fmt.Printf("Write error: %v\n", err)
+			break
+		}
+		progress.Update(n)
 	}
 	receiver.Close()
-
-	fmt.Printf("Downloaded %d bytes to %s\n", total, filename)
+	progress.Done()
 
 	reply, _ = tcpctrl.ReadLine(conn)
 	fmt.Println(reply)
@@ -261,25 +395,43 @@ func handleSTOR(conn net.Conn, filename string) {
 	localFile, err := os.Open(filename)
 	if err != nil {
 		fmt.Printf("Cannot open local file: %v\n", err)
-		tmpConn, _ := net.ListenUDP("udp", nil)
-		tmpConn.Close()
 		return
 	}
 	defer localFile.Close()
 
-	udpAddr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
-	udpConn, _ := net.ListenUDP("udp", nil)
-	defer udpConn.Close()
-
-	sessionID := uint32(1)
-	sender := rdt.NewSender(udpConn, sessionID)
-	if err := sender.Connect(udpAddr); err != nil {
-		fmt.Printf("RDT connect error: %v\n", err)
+	fileInfo, err := localFile.Stat()
+	if err != nil {
+		fmt.Printf("Cannot stat local file: %v\n", err)
 		return
 	}
 
-	buf := make([]byte, 1400)
-	total := 0
+	udpConn, cleanup, err := prepareDataTransfer()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer cleanup()
+
+	sessionID := uint32(1)
+	sender := rdt.NewSender(udpConn, sessionID)
+
+	switch connDataMode {
+	case modePASV:
+		udpAddr, _ := net.ResolveUDPAddr("udp",
+			fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
+		if err := sender.Connect(udpAddr); err != nil {
+			fmt.Printf("RDT connect: %v\n", err)
+			return
+		}
+	case modePORT:
+		if err := sender.Accept(); err != nil {
+			fmt.Printf("RDT accept: %v\n", err)
+			return
+		}
+	}
+
+	progress := rdt.NewProgressBar(fileInfo.Size())
+	buf := make([]byte, rdt.MSS)
 	for {
 		n, err := localFile.Read(buf)
 		if n > 0 {
@@ -287,7 +439,7 @@ func handleSTOR(conn net.Conn, filename string) {
 				fmt.Printf("Send error: %v\n", sendErr)
 				break
 			}
-			total += n
+			progress.Update(n)
 		}
 		if err == io.EOF {
 			break
@@ -297,10 +449,10 @@ func handleSTOR(conn net.Conn, filename string) {
 			break
 		}
 	}
+	// Wait for remaining inflight data to drain before closing
 	time.Sleep(200 * time.Millisecond)
 	sender.Close()
-
-	fmt.Printf("Uploaded %d bytes from %s\n", total, filename)
+	progress.Done()
 
 	reply, _ = tcpctrl.ReadLine(conn)
 	fmt.Println(reply)
