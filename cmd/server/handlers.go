@@ -495,12 +495,13 @@ func handleNLST(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 	listing := strings.Join(names, "\r\n") + "\r\n"
 
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, "Opening data connection for name list.")
+
 	sender, err := setupDataSender(sess)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
 		return
 	}
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, "Opening data connection for name list.")
 
 	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
 	defer func() {
@@ -532,12 +533,13 @@ func handleAPPE(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 	defer file.Close()
 
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, fmt.Sprintf("Opening data connection for %s.", args))
+
 	receiver, err := setupDataReceiver(sess)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
 		return
 	}
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, fmt.Sprintf("Opening data connection for %s.", args))
 
 	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
 	defer func() {
@@ -582,12 +584,13 @@ func handleSTOU(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 	defer file.Close()
 
+	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, fmt.Sprintf("Opening data connection for %s.", uniqueName))
+
 	receiver, err := setupDataReceiver(sess)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
 		return
 	}
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, fmt.Sprintf("Opening data connection for %s.", uniqueName))
 
 	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
 	defer func() {
