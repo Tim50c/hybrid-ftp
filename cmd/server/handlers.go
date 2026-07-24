@@ -38,7 +38,7 @@ func setupDataSender(sess *session.Session) (*rdt.Sender, error) {
 			sess.DataConn.Close()
 		}
 		sess.DataConn = udpConn
-		sender := rdt.NewSender(udpConn, sess.ID)
+		sender := rdt.NewSender(udpConn, 1)
 		if err := sender.Connect(sess.DataAddr); err != nil {
 			return nil, fmt.Errorf("rdt connect: %w", err)
 		}
@@ -47,7 +47,7 @@ func setupDataSender(sess *session.Session) (*rdt.Sender, error) {
 	if sess.DataConn == nil {
 		return nil, fmt.Errorf("use PASV or PORT first")
 	}
-	sender := rdt.NewSender(sess.DataConn, sess.ID)
+	sender := rdt.NewSender(sess.DataConn, 1)
 	if err := sender.Accept(); err != nil {
 		return nil, fmt.Errorf("rdt accept: %w", err)
 	}
@@ -64,7 +64,7 @@ func setupDataReceiver(sess *session.Session) (*rdt.Receiver, error) {
 			sess.DataConn.Close()
 		}
 		sess.DataConn = udpConn
-		receiver := rdt.NewReceiver(udpConn, sess.ID)
+		receiver := rdt.NewReceiver(udpConn, 1)
 		if err := receiver.Connect(sess.DataAddr); err != nil {
 			return nil, fmt.Errorf("rdt connect: %w", err)
 		}
@@ -73,7 +73,7 @@ func setupDataReceiver(sess *session.Session) (*rdt.Receiver, error) {
 	if sess.DataConn == nil {
 		return nil, fmt.Errorf("use PASV or PORT first")
 	}
-	receiver := rdt.NewReceiver(sess.DataConn, sess.ID)
+	receiver := rdt.NewReceiver(sess.DataConn, 1)
 	if err := receiver.Accept(); err != nil {
 		return nil, fmt.Errorf("rdt accept: %w", err)
 	}
