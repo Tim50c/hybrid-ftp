@@ -2,6 +2,9 @@ REQUIREMENTS.md
 /server
 /client
 
+# build file
+server.exe
+
 # nix + direnv (personal config, not for team use)
 shell.nix
 .envrc
@@ -9,3 +12,6 @@ shell.nix
 
 # opencode local config
 opencode.json
+
+# superpowers local config
+.superpowers/
