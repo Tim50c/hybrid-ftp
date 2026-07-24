@@ -291,15 +291,28 @@ func handleList(conn net.Conn) {
 		return
 	}
 
-	udpAddr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
-	udpConn, _ := net.ListenUDP("udp", nil)
-	defer udpConn.Close()
+	udpConn, cleanup, err := prepareDataTransfer()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer cleanup()
 
 	sessionID := uint32(1)
 	r := rdt.NewReceiver(udpConn, sessionID)
-	if err := r.Connect(udpAddr); err != nil {
-		fmt.Printf("RDT connect error: %v\n", err)
-		return
+
+	switch connDataMode {
+	case modePASV:
+		udpAddr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
+		if err := r.Connect(udpAddr); err != nil {
+			fmt.Printf("RDT connect error: %v\n", err)
+			return
+		}
+	case modePORT:
+		if err := r.Accept(); err != nil {
+			fmt.Printf("RDT accept error: %v\n", err)
+			return
+		}
 	}
 
 	var listing []byte

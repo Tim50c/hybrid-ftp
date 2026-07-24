@@ -88,6 +88,13 @@ func cleanupDataConn(sess *session.Session) {
 	sess.DataMode = ""
 }
 
+func dataModeReady(sess *session.Session) bool {
+	if sess.DataMode == "PORT" {
+		return sess.DataAddr != nil
+	}
+	return sess.DataConn != nil
+}
+
 func handleUSER(conn net.Conn, sess *session.Session, usersPath string, args string) {
 	sess.Username = args
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyNeedPassword, "Password required.")
@@ -219,6 +226,11 @@ func handleLIST(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 	listing := fs.FormatList(infos)
 
+	if !dataModeReady(sess) {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		return
+	}
+
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, "Opening data connection for directory listing.")
 
 	serverSender, err := setupDataSender(sess)
@@ -257,6 +269,11 @@ func handleRETR(conn net.Conn, sess *session.Session, root string, args string) 
 		return
 	}
 	defer file.Close()
+
+	if !dataModeReady(sess) {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		return
+	}
 
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK,
 		fmt.Sprintf("Opening data connection for %s (%d bytes).", args, info.Size()))
@@ -323,6 +340,11 @@ func handleSTOR(conn net.Conn, sess *session.Session, root string, args string) 
 		return
 	}
 	defer file.Close()
+
+	if !dataModeReady(sess) {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		return
+	}
 
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK,
 		fmt.Sprintf("Opening data connection for %s.", args))
@@ -495,6 +517,11 @@ func handleNLST(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 	listing := strings.Join(names, "\r\n") + "\r\n"
 
+	if !dataModeReady(sess) {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		return
+	}
+
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, "Opening data connection for name list.")
 
 	sender, err := setupDataSender(sess)
@@ -532,6 +559,11 @@ func handleAPPE(conn net.Conn, sess *session.Session, root string, args string) 
 		return
 	}
 	defer file.Close()
+
+	if !dataModeReady(sess) {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		return
+	}
 
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, fmt.Sprintf("Opening data connection for %s.", args))
 
@@ -583,6 +615,11 @@ func handleSTOU(conn net.Conn, sess *session.Session, root string, args string) 
 		return
 	}
 	defer file.Close()
+
+	if !dataModeReady(sess) {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		return
+	}
 
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, fmt.Sprintf("Opening data connection for %s.", uniqueName))
 
