@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -705,6 +706,122 @@ func TestE2E_NOOP_HELP(t *testing.T) {
 	}
 
 	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_PORT_Transfer(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	os.WriteFile(filepath.Join(rootDir, "portfile.txt"), []byte("port mode data\n"), 0644)
+
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen udp: %v", err)
+	}
+	defer udpConn.Close()
+
+	localPort := udpConn.LocalAddr().(*net.UDPAddr).Port
+	p1 := localPort / 256
+	p2 := localPort % 256
+	portCmd := fmt.Sprintf("PORT 127,0,0,1,%d,%d", p1, p2)
+
+	if r := fc.sendAndRead(t, portCmd); !strings.HasPrefix(r, "200") {
+		t.Fatalf("PORT: expected 200, got %s", r)
+	}
+
+	r := fc.sendAndRead(t, "RETR portfile.txt")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("RETR: expected 150, got %s", r)
+	}
+
+	sessionID := uint32(1)
+	receiver := rdt.NewReceiver(udpConn, sessionID)
+
+	recvCh := make(chan []byte, 1)
+	go func() {
+		receiver.Accept()
+		var buf []byte
+		for chunk := range receiver.Receive() {
+			buf = append(buf, chunk...)
+		}
+		recvCh <- buf
+	}()
+
+	select {
+	case data := <-recvCh:
+		if !bytes.Equal(data, []byte("port mode data\n")) {
+			t.Errorf("PORT download: got %q", string(data))
+		}
+	case <-time.After(5 * time.Second):
+		receiver.Close()
+		t.Error("PORT download timed out")
+	}
+
+	time.Sleep(500 * time.Millisecond)
+	fc.readReply(t)
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_ConcurrentSessions(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	os.WriteFile(filepath.Join(rootDir, "shared.txt"), []byte("shared content\n"), 0644)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			conn, err := net.Dial("tcp", ":"+ctrlPort)
+			if err != nil {
+				t.Errorf("session %d dial: %v", id, err)
+				return
+			}
+			defer conn.Close()
+			fc := newFTPConn(t, conn)
+
+			fc.sendAndRead(t, "")
+			fc.sendAndRead(t, "USER admin")
+			fc.sendAndRead(t, "PASS admin")
+
+			reply := fc.sendAndRead(t, "PASV")
+			if !strings.HasPrefix(reply, "227") {
+				t.Errorf("session %d PASV: expected 227, got %s", id, reply)
+				return
+			}
+			host, port, _ := parsePASVReply(reply)
+
+			r := fc.sendAndRead(t, "RETR shared.txt")
+			if !strings.HasPrefix(r, "150") {
+				t.Errorf("session %d RETR: expected 150, got %s", id, r)
+				return
+			}
+
+			data, err := doRDTDownload(t, host, port)
+			if err != nil {
+				t.Errorf("session %d download: %v", id, err)
+				return
+			}
+			if !bytes.Equal(data, []byte("shared content\n")) {
+				t.Errorf("session %d: content mismatch", id)
+			}
+
+			time.Sleep(500 * time.Millisecond)
+			fc.readReply(t)
+			fc.sendAndRead(t, "QUIT")
+		}(i)
+	}
+	wg.Wait()
 }
 
 func doRDTDownloadString(t *testing.T, host string, port int) string {
