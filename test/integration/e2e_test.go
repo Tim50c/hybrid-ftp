@@ -389,6 +389,143 @@ func TestE2E_CWD(t *testing.T) {
 	fc.sendAndRead(t, "QUIT")
 }
 
+func TestE2E_MKD_RMD(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	if r := fc.sendAndRead(t, "MKD testdir"); !strings.HasPrefix(r, "257") {
+		t.Errorf("MKD: expected 257, got %s", r)
+	}
+
+	reply := fc.sendAndRead(t, "PASV")
+	host, port, _ := parsePASVReply(reply)
+	r := fc.sendAndRead(t, "LIST")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("LIST: expected 150, got %s", r)
+	}
+	listing := doRDTDownloadString(t, host, port)
+	if !strings.Contains(listing, "testdir") {
+		t.Errorf("LIST should contain testdir, got: %s", listing)
+	}
+	fc.readReply(t)
+
+	if r := fc.sendAndRead(t, "RMD testdir"); !strings.HasPrefix(r, "250") {
+		t.Errorf("RMD: expected 250, got %s", r)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_DELE(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	os.WriteFile(filepath.Join(rootDir, "todelete.txt"), []byte("bye"), 0644)
+
+	if r := fc.sendAndRead(t, "DELE todelete.txt"); !strings.HasPrefix(r, "250") {
+		t.Errorf("DELE: expected 250, got %s", r)
+	}
+
+	if r := fc.sendAndRead(t, "RETR todelete.txt"); !strings.HasPrefix(r, "550") {
+		t.Errorf("RETR deleted file: expected 550, got %s", r)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_CDUP(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	os.MkdirAll(filepath.Join(rootDir, "cdupdir"), 0755)
+
+	fc.sendAndRead(t, "CWD cdupdir")
+	if r := fc.sendAndRead(t, "CDUP"); !strings.HasPrefix(r, "250") {
+		t.Errorf("CDUP: expected 250, got %s", r)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_NLST(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	os.WriteFile(filepath.Join(rootDir, "alpha.txt"), []byte("a"), 0644)
+	os.WriteFile(filepath.Join(rootDir, "beta.txt"), []byte("b"), 0644)
+
+	reply := fc.sendAndRead(t, "PASV")
+	host, port, _ := parsePASVReply(reply)
+
+	r := fc.sendAndRead(t, "NLST")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("NLST: expected 150, got %s", r)
+	}
+	listing := doRDTDownloadString(t, host, port)
+	if !strings.Contains(listing, "alpha.txt") || !strings.Contains(listing, "beta.txt") {
+		t.Errorf("NLST missing files, got: %s", listing)
+	}
+	fc.readReply(t)
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_SIZE_MDTM(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	os.WriteFile(filepath.Join(rootDir, "sized.txt"), []byte("12345"), 0644)
+
+	if r := fc.sendAndRead(t, "SIZE sized.txt"); !strings.HasPrefix(r, "213") || !strings.Contains(r, "5") {
+		t.Errorf("SIZE: expected 213 with 5, got %s", r)
+	}
+
+	if r := fc.sendAndRead(t, "MDTM sized.txt"); !strings.HasPrefix(r, "213") {
+		t.Errorf("MDTM: expected 213, got %s", r)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
 func doRDTDownloadString(t *testing.T, host string, port int) string {
 	data, err := doRDTDownload(t, host, port)
 	if err != nil {
