@@ -182,6 +182,136 @@ go test ./test/integration/... -v -timeout 180s
 go vet ./...
 ```
 
+### Manual Testing
+
+#### 1. Start the Server
+
+```bash
+# Terminal 1
+mkdir -p /tmp/hybrid-ftp
+echo "hello from hybrid ftp" > /tmp/hybrid-ftp/hello.txt
+echo "binary content here" > /tmp/hybrid-ftp/data.bin
+mkdir /tmp/hybrid-ftp/subdir
+echo "nested file" > /tmp/hybrid-ftp/subdir/nested.txt
+
+go run ./cmd/server -ctrl :2121 -root /tmp/hybrid-ftp -users users.conf
+```
+
+#### 2. Start the Client
+
+```bash
+# Terminal 2
+go run ./cmd/client -host 127.0.0.1 -ctrl 2121
+```
+
+#### 3. Login and Navigation
+
+```
+ftp> USER admin
+331 Password required.
+ftp> PASS admin
+230 Login successful.
+ftp> PWD
+257 "/"
+ftp> CWD subdir
+250 Directory changed to /subdir.
+ftp> PWD
+257 "/subdir"
+ftp> CDUP
+250 Directory changed to parent.
+```
+
+#### 4. Directory Operations
+
+```
+ftp> MKD newdir
+257 "/newdir" created.
+ftp> RMD newdir
+250 "/newdir" removed.
+ftp> LIST
+227 Entering Passive Mode (127,0,0,1,xxx,xxx)
+150 Opening data connection for directory listing.
+226 Directory listing complete.
+```
+
+#### 5. Download a File (RETR)
+
+```
+ftp> PASV
+227 Entering Passive Mode (127,0,0,1,xxx,xxx)
+ftp> RETR hello.txt
+150 Opening data connection for hello.txt (21 bytes).
+██████████████████████████████ 100% | 2.0 MiB/s | ETA: 00:00
+226 Transfer complete.
+```
+
+#### 6. Upload a File (STOR)
+
+First, create a local file:
+```bash
+# In the client directory
+echo "uploaded from client" > upload.txt
+```
+
+```
+ftp> PASV
+227 Entering Passive Mode (127,0,0,1,xxx,xxx)
+ftp> STOR upload.txt
+150 Opening data connection for upload.txt.
+██████████████████████████████ 100% | 1.8 MiB/s | ETA: 00:00
+226 Transfer complete.
+```
+
+#### 7. Hash Verification
+
+```
+ftp> HASH hello.txt
+213 5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03
+Hashes match - file integrity verified.
+```
+
+#### 8. PORT Mode (Active)
+
+```
+ftp> PORT 127,0,0,1,200,0
+200 PORT command successful.
+ftp> RETR hello.txt
+150 Opening data connection for hello.txt (21 bytes).
+██████████████████████████████ 100% | 2.0 MiB/s | ETA: 00:00
+226 Transfer complete.
+```
+
+#### 9. Large File Transfer (Progress Bar)
+
+```bash
+# Create a test file
+dd if=/dev/urandom of=/tmp/hybrid-ftp/bigfile.bin bs=1M count=50
+```
+
+```
+ftp> PASV
+ftp> RETR bigfile.bin
+████████████████████████░░░░░░░░ 65% | 3.5 MiB/s | ETA: 00:05
+```
+
+#### 10. Concurrent Sessions
+
+Open two terminals and run the client in each. Both can authenticate and transfer files simultaneously — each session gets its own UDP data port, and transfers proceed independently.
+
+#### 11. Local Client Commands
+
+```
+ftp> lpwd
+/home/user
+ftp> lls
+upload.txt  hello.txt  data.bin
+ftp> lcd /tmp
+ftp> lpwd
+/tmp
+ftp> lls
+hybrid-ftp  other-files
+```
+
 ---
 
 ## Project Structure
