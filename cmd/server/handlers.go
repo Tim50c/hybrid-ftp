@@ -456,13 +456,49 @@ func handleMODE(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 }
 
+var helpTexts = map[string]string{
+	"USER": "Send username for authentication.",
+	"PASS": "Send password for authentication.",
+	"QUIT": "Terminate control connection.",
+	"NOOP": "No-operation; keep-alive ping.",
+	"PWD":  "Print current working directory.",
+	"CWD":  "Change working directory.",
+	"CDUP": "Change to parent directory.",
+	"MKD":  "Create a directory.",
+	"RMD":  "Remove an empty directory.",
+	"LIST": "List directory contents with metadata.",
+	"NLST": "List directory contents (names only).",
+	"STAT": "Show server status or file/directory metadata.",
+	"SIZE": "Return file size in bytes.",
+	"MDTM": "Return file modification timestamp.",
+	"TYPE": "Set transfer type: A (ASCII) or I (Binary).",
+	"MODE": "Set transfer mode: S (Stream), B (Block), or C (Compressed).",
+	"PORT": "Enter active mode: specify client data port.",
+	"PASV": "Enter passive mode: server opens data port.",
+	"RETR": "Retrieve (download) a file.",
+	"STOR": "Store (upload) a file.",
+	"STOU": "Store a file with a unique server-generated name.",
+	"APPE": "Append to an existing file; create if absent.",
+	"DELE": "Delete a file.",
+	"RNFR": "Rename from: specify source filename.",
+	"RNTO": "Rename to: complete rename.",
+	"HASH": "Compute SHA-256 hash of a file.",
+	"ABOR": "Abort current data transfer.",
+	"HELP": "Show help for commands.",
+}
+
 func handleHELP(conn net.Conn, sess *session.Session, root string, args string) {
 	commands := "USER PASS QUIT NOOP PWD CWD CDUP MKD RMD LIST NLST STAT SIZE MDTM TYPE MODE PORT PASV RETR STOR STOU APPE DELE RNFR RNTO HASH ABOR HELP"
 	if args == "" {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyHelp, fmt.Sprintf("Supported commands: %s", commands))
 		return
 	}
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyHelp, fmt.Sprintf("Help for %s: see RFC 959.", strings.ToUpper(args)))
+	upper := strings.ToUpper(strings.TrimSpace(args))
+	if desc, ok := helpTexts[upper]; ok {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyHelp, fmt.Sprintf("%s: %s", upper, desc))
+	} else {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyHelp, fmt.Sprintf("%s: unknown command.", upper))
+	}
 }
 
 func handleSTAT(conn net.Conn, sess *session.Session, root string, args string) {
