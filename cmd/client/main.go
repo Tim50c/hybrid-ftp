@@ -87,14 +87,14 @@ func main() {
 
 		cmd, _ := tcpctrl.ParseCommand(line)
 
-		isDataCmd := cmd == tcpctrl.CmdLIST || cmd == tcpctrl.CmdRETR || cmd == tcpctrl.CmdSTOR
+		isDataCmd := cmd == tcpctrl.CmdLIST || cmd == tcpctrl.CmdRETR || cmd == tcpctrl.CmdSTOR || cmd == tcpctrl.CmdNLST || cmd == tcpctrl.CmdSTOU || cmd == tcpctrl.CmdAPPE
 		if isDataCmd && connDataMode == modeNone {
 			fmt.Println("Use PASV or PORT first.")
 			fmt.Print("ftp> ")
 			continue
 		}
 
-		if cmd != tcpctrl.CmdPORT && cmd != tcpctrl.CmdHASH && cmd != tcpctrl.CmdLIST && cmd != tcpctrl.CmdRETR && cmd != tcpctrl.CmdSTOR {
+		if cmd != tcpctrl.CmdPORT && cmd != tcpctrl.CmdHASH && cmd != tcpctrl.CmdLIST && cmd != tcpctrl.CmdRETR && cmd != tcpctrl.CmdSTOR && cmd != tcpctrl.CmdNLST && cmd != tcpctrl.CmdSTOU && cmd != tcpctrl.CmdAPPE {
 			if _, err := io.WriteString(conn, line+"\r\n"); err != nil {
 				log.Fatalf("write error: %v", err)
 			}
@@ -129,8 +129,20 @@ func main() {
 			ensurePASV(conn)
 			handleSTOR(conn, strings.TrimSpace(line[5:]))
 
-		case tcpctrl.CmdHASH:
-			handleHASH(conn, strings.TrimSpace(line[5:]))
+	case tcpctrl.CmdNLST:
+		ensurePASV(conn)
+		handleNLST(conn, strings.TrimSpace(line[5:]))
+
+	case tcpctrl.CmdSTOU:
+		ensurePASV(conn)
+		handleSTOU(conn, strings.TrimSpace(line[5:]))
+
+	case tcpctrl.CmdAPPE:
+		ensurePASV(conn)
+		handleAPPE(conn, strings.TrimSpace(line[5:]))
+
+	case tcpctrl.CmdHASH:
+		handleHASH(conn, strings.TrimSpace(line[5:]))
 
 		case tcpctrl.CmdQUIT:
 			reply, _ := tcpctrl.ReadLine(conn)
@@ -531,6 +543,213 @@ func handleSTOR(conn net.Conn, filename string) {
 		}
 	}
 	// Wait for remaining inflight data to drain before closing
+	time.Sleep(200 * time.Millisecond)
+	sender.Close()
+	progress.Done()
+
+	reply, _ = tcpctrl.ReadLine(conn)
+	fmt.Println(reply)
+}
+
+func handleNLST(conn net.Conn, path string) {
+	if path == "" {
+		io.WriteString(conn, "NLST\r\n")
+	} else {
+		io.WriteString(conn, "NLST "+path+"\r\n")
+	}
+	reply, _ := tcpctrl.ReadLine(conn)
+	fmt.Println(reply)
+	if !strings.HasPrefix(reply, "150") {
+		return
+	}
+
+	udpConn, cleanup, err := prepareDataTransfer()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer cleanup()
+
+	sessionID := uint32(1)
+	r := rdt.NewReceiver(udpConn, sessionID)
+
+	switch connDataMode {
+	case modePASV:
+		udpAddr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
+		if err := r.Connect(udpAddr); err != nil {
+			fmt.Printf("RDT connect error: %v\n", err)
+			return
+		}
+	case modePORT:
+		if err := r.Accept(); err != nil {
+			fmt.Printf("RDT accept error: %v\n", err)
+			return
+		}
+	}
+
+	var listing []byte
+	for chunk := range r.Receive() {
+		listing = append(listing, chunk...)
+	}
+	r.Close()
+	fmt.Print(string(listing))
+
+	reply, _ = tcpctrl.ReadLine(conn)
+	fmt.Println(reply)
+}
+
+func handleSTOU(conn net.Conn, filename string) {
+	if filename == "" {
+		fmt.Println("STOU requires a local filename to upload.")
+		return
+	}
+
+	io.WriteString(conn, "STOU\r\n")
+	reply, _ := tcpctrl.ReadLine(conn)
+	fmt.Println(reply)
+	if !strings.HasPrefix(reply, "150") {
+		return
+	}
+
+	localFile, err := os.Open(filename)
+	if err != nil {
+		fmt.Printf("Cannot open local file: %v\n", err)
+		return
+	}
+	defer localFile.Close()
+
+	fileInfo, err := localFile.Stat()
+	if err != nil {
+		fmt.Printf("Cannot stat local file: %v\n", err)
+		return
+	}
+
+	udpConn, cleanup, err := prepareDataTransfer()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer cleanup()
+
+	sessionID := uint32(1)
+	sender := rdt.NewSender(udpConn, sessionID)
+
+	switch connDataMode {
+	case modePASV:
+		udpAddr, _ := net.ResolveUDPAddr("udp",
+			fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
+		if err := sender.Connect(udpAddr); err != nil {
+			fmt.Printf("RDT connect: %v\n", err)
+			return
+		}
+	case modePORT:
+		if err := sender.Accept(); err != nil {
+			fmt.Printf("RDT accept: %v\n", err)
+			return
+		}
+	}
+
+	progress := rdt.NewProgressBar(fileInfo.Size())
+	buf := make([]byte, rdt.MSS)
+	for {
+		n, err := localFile.Read(buf)
+		if n > 0 {
+			if sendErr := sender.Send(buf[:n]); sendErr != nil {
+				fmt.Printf("Send error: %v\n", sendErr)
+				break
+			}
+			progress.Update(n)
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Printf("Read error: %v\n", err)
+			break
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+	sender.Close()
+	progress.Done()
+
+	reply, _ = tcpctrl.ReadLine(conn)
+	fmt.Println(reply)
+}
+
+func handleAPPE(conn net.Conn, filename string) {
+	if filename == "" {
+		io.WriteString(conn, "APPE\r\n")
+		reply, _ := tcpctrl.ReadLine(conn)
+		if reply != "" {
+			fmt.Println(reply)
+		}
+		return
+	}
+
+	io.WriteString(conn, "APPE "+filename+"\r\n")
+	reply, _ := tcpctrl.ReadLine(conn)
+	fmt.Println(reply)
+	if !strings.HasPrefix(reply, "150") {
+		return
+	}
+
+	localFile, err := os.Open(filename)
+	if err != nil {
+		fmt.Printf("Cannot open local file: %v\n", err)
+		return
+	}
+	defer localFile.Close()
+
+	fileInfo, err := localFile.Stat()
+	if err != nil {
+		fmt.Printf("Cannot stat local file: %v\n", err)
+		return
+	}
+
+	udpConn, cleanup, err := prepareDataTransfer()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer cleanup()
+
+	sessionID := uint32(1)
+	sender := rdt.NewSender(udpConn, sessionID)
+
+	switch connDataMode {
+	case modePASV:
+		udpAddr, _ := net.ResolveUDPAddr("udp",
+			fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
+		if err := sender.Connect(udpAddr); err != nil {
+			fmt.Printf("RDT connect: %v\n", err)
+			return
+		}
+	case modePORT:
+		if err := sender.Accept(); err != nil {
+			fmt.Printf("RDT accept: %v\n", err)
+			return
+		}
+	}
+
+	progress := rdt.NewProgressBar(fileInfo.Size())
+	buf := make([]byte, rdt.MSS)
+	for {
+		n, err := localFile.Read(buf)
+		if n > 0 {
+			if sendErr := sender.Send(buf[:n]); sendErr != nil {
+				fmt.Printf("Send error: %v\n", sendErr)
+				break
+			}
+			progress.Update(n)
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Printf("Read error: %v\n", err)
+			break
+		}
+	}
 	time.Sleep(200 * time.Millisecond)
 	sender.Close()
 	progress.Done()

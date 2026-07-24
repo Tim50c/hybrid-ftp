@@ -365,3 +365,177 @@ func withCwd(t *testing.T, dir string) {
 		}
 	})
 }
+
+func TestHandleNLST_WritesCommand(t *testing.T) {
+	reply := "150 Opening data connection for name list.\r\n"
+	conn := &pipeConn{readBuf: bytes.NewBufferString(reply)}
+	out := captureStdout(t, func() {
+		handleNLST(conn, "")
+	})
+
+	if !strings.Contains(conn.writeBuf.String(), "NLST\r\n") {
+		t.Errorf("expected NLST command, got %q", conn.writeBuf.String())
+	}
+	if !strings.Contains(out, "150 Opening data connection") {
+		t.Errorf("expected 150 reply echo, got %q", out)
+	}
+}
+
+func TestHandleNLST_WritesCommandWithPath(t *testing.T) {
+	reply := "150 Opening data connection for name list.\r\n"
+	conn := &pipeConn{readBuf: bytes.NewBufferString(reply)}
+	_ = captureStdout(t, func() {
+		handleNLST(conn, "subdir")
+	})
+
+	if !strings.Contains(conn.writeBuf.String(), "NLST subdir\r\n") {
+		t.Errorf("expected NLST subdir command, got %q", conn.writeBuf.String())
+	}
+}
+
+func TestHandleNLST_Non150Reply(t *testing.T) {
+	reply := "550 Cannot list directory.\r\n"
+	conn := &pipeConn{readBuf: bytes.NewBufferString(reply)}
+	out := captureStdout(t, func() {
+		handleNLST(conn, "")
+	})
+
+	if !strings.Contains(out, "550 Cannot list directory") {
+		t.Errorf("expected 550 reply echo, got %q", out)
+	}
+}
+
+func TestHandleSTOU_EmptyFilename(t *testing.T) {
+	conn := &pipeConn{readBuf: bytes.NewBufferString("")}
+	out := captureStdout(t, func() {
+		handleSTOU(conn, "")
+	})
+
+	if !strings.Contains(out, "STOU requires a local filename") {
+		t.Errorf("expected missing-filename error, got %q", out)
+	}
+	if strings.Contains(conn.writeBuf.String(), "STOU") {
+		t.Errorf("no command should be written for empty filename, got %q", conn.writeBuf.String())
+	}
+}
+
+func TestHandleSTOU_WritesCommand(t *testing.T) {
+	dir := t.TempDir()
+	withCwd(t, dir)
+	filename := "upload.txt"
+	if err := os.WriteFile(filepath.Join(dir, filename), []byte("data"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	reply := "150 Opening data connection for stou_test.dat.\r\n"
+	conn := &pipeConn{readBuf: bytes.NewBufferString(reply)}
+	out := captureStdout(t, func() {
+		handleSTOU(conn, filename)
+	})
+
+	if !strings.Contains(conn.writeBuf.String(), "STOU\r\n") {
+		t.Errorf("expected STOU command, got %q", conn.writeBuf.String())
+	}
+	if !strings.Contains(out, "150 Opening data connection") {
+		t.Errorf("expected 150 reply echo, got %q", out)
+	}
+}
+
+func TestHandleSTOU_MissingLocalFile(t *testing.T) {
+	reply := "150 Opening data connection for stou_test.dat.\r\n"
+	conn := &pipeConn{readBuf: bytes.NewBufferString(reply)}
+	out := captureStdout(t, func() {
+		handleSTOU(conn, "nonexistent.txt")
+	})
+
+	if !strings.Contains(out, "Cannot open local file") {
+		t.Errorf("expected open error, got %q", out)
+	}
+}
+
+func TestHandleSTOU_Non150Reply(t *testing.T) {
+	dir := t.TempDir()
+	withCwd(t, dir)
+	filename := "upload.txt"
+	if err := os.WriteFile(filepath.Join(dir, filename), []byte("data"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	reply := "425 Cannot open data connection.\r\n"
+	conn := &pipeConn{readBuf: bytes.NewBufferString(reply)}
+	out := captureStdout(t, func() {
+		handleSTOU(conn, filename)
+	})
+
+	if !strings.Contains(out, "425 Cannot open data connection") {
+		t.Errorf("expected 425 reply echo, got %q", out)
+	}
+}
+
+func TestHandleAPPE_WritesCommand(t *testing.T) {
+	dir := t.TempDir()
+	withCwd(t, dir)
+	filename := "append.txt"
+	if err := os.WriteFile(filepath.Join(dir, filename), []byte("data"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	reply := "150 Opening data connection for append.txt.\r\n"
+	conn := &pipeConn{readBuf: bytes.NewBufferString(reply)}
+	out := captureStdout(t, func() {
+		handleAPPE(conn, filename)
+	})
+
+	if !strings.Contains(conn.writeBuf.String(), "APPE "+filename+"\r\n") {
+		t.Errorf("expected APPE %s command, got %q", filename, conn.writeBuf.String())
+	}
+	if !strings.Contains(out, "150 Opening data connection") {
+		t.Errorf("expected 150 reply echo, got %q", out)
+	}
+}
+
+func TestHandleAPPE_EmptyFilename(t *testing.T) {
+	reply := "501 APPE requires a filename.\r\n"
+	conn := &pipeConn{readBuf: bytes.NewBufferString(reply)}
+	out := captureStdout(t, func() {
+		handleAPPE(conn, "")
+	})
+
+	if !strings.Contains(conn.writeBuf.String(), "APPE\r\n") {
+		t.Errorf("expected APPE command for empty filename, got %q", conn.writeBuf.String())
+	}
+	if !strings.Contains(out, "501 APPE requires a filename") {
+		t.Errorf("expected 501 reply echo, got %q", out)
+	}
+}
+
+func TestHandleAPPE_MissingLocalFile(t *testing.T) {
+	reply := "150 Opening data connection for nonexistent.txt.\r\n"
+	conn := &pipeConn{readBuf: bytes.NewBufferString(reply)}
+	out := captureStdout(t, func() {
+		handleAPPE(conn, "nonexistent.txt")
+	})
+
+	if !strings.Contains(out, "Cannot open local file") {
+		t.Errorf("expected open error, got %q", out)
+	}
+}
+
+func TestHandleAPPE_Non150Reply(t *testing.T) {
+	dir := t.TempDir()
+	withCwd(t, dir)
+	filename := "append.txt"
+	if err := os.WriteFile(filepath.Join(dir, filename), []byte("data"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	reply := "503 Use PASV or PORT first.\r\n"
+	conn := &pipeConn{readBuf: bytes.NewBufferString(reply)}
+	out := captureStdout(t, func() {
+		handleAPPE(conn, filename)
+	})
+
+	if !strings.Contains(out, "503 Use PASV or PORT first") {
+		t.Errorf("expected 503 reply echo, got %q", out)
+	}
+}
