@@ -3,6 +3,7 @@ package integration
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net"
@@ -669,8 +670,12 @@ func TestE2E_HASH(t *testing.T) {
 	if !strings.HasPrefix(r, "213") {
 		t.Errorf("HASH: expected 213, got %s", r)
 	}
-	if !strings.Contains(r, "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03") {
-		t.Errorf("HASH: wrong hash in %s", r)
+	// Exact format: "213 SHA-256 0-<64 hex> <filename>"
+	// (catches drift in the wire format that the unit tests in cmd/client
+	// would not see because they only assert on the parsed hash).
+	want := "213 SHA-256 0-5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03 hash.txt"
+	if r != want {
+		t.Errorf("HASH: exact reply mismatch\n got: %q\nwant: %q", r, want)
 	}
 
 	fc.sendAndRead(t, "QUIT")
@@ -882,6 +887,147 @@ func TestE2E_ABOR(t *testing.T) {
 	}
 
 	fc.sendAndRead(t, "QUIT")
+}
+
+// TestE2E_ClientCLI_HASH drives the real compiled client binary end-to-end
+// against a running server. This is the strongest regression test for the
+// HASH bug where the client used to compare the entire server reply body
+// (including "SHA-256 0-" prefix and filename) against the local hash, so
+// every HASH printed "MISMATCH!" even when the file was identical.
+//
+// The test:
+//  1. creates a file on the server with known content,
+//  2. spawns the client binary with stdin scripted to USER/PASS/PASV/HASH/QUIT,
+//  3. captures the client's stdout,
+//  4. asserts the stdout contains "Hashes match - file integrity verified."
+//     and does NOT contain "MISMATCH!".
+func TestE2E_ClientCLI_HASH(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	// Local working dir for the client binary. The client hashes the local
+	// file at the given name (relative to its cwd), so we put the file
+	// in a temp dir and run the client with cmd.Dir = tmpDir.
+	localDir := t.TempDir()
+	// The local and server file must share the SAME name, because the
+	// client sends the name to the server and the server looks it up
+	// in its own root.
+	const name = "cli_hash.txt"
+	content := []byte("Hello from end-to-end client-CLI HASH test\n")
+	if err := os.WriteFile(filepath.Join(localDir, name), content, 0644); err != nil {
+		t.Fatalf("write local file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rootDir, name), content, 0644); err != nil {
+		t.Fatalf("write server file: %v", err)
+	}
+
+	cmd := exec.Command(clientBin, "-host", "127.0.0.1", "-ctrl", ctrlPort)
+	cmd.Dir = localDir
+	cmd.Stderr = os.Stderr
+
+	// Note: PASV is required before HASH because the client has no
+	// data-mode set after login; HASH itself doesn't use the data channel
+	// but the client still requires a mode to be set. Send a dummy PASV
+	// so subsequent data commands are accepted.
+	stdin := strings.NewReader("USER admin\r\nPASS admin\r\nPASV\r\nHASH " + name + "\r\nQUIT\r\n")
+	cmd.Stdin = stdin
+
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("client run: %v", err)
+	}
+
+	out := stdout.String()
+
+	// Must contain the match line.
+	if !strings.Contains(out, "Hashes match - file integrity verified.") {
+		t.Errorf("client stdout missing 'Hashes match' line; full output:\n%s", out)
+	}
+	// Must NOT contain MISMATCH for matching files.
+	if strings.Contains(out, "MISMATCH!") {
+		t.Errorf("client stdout unexpectedly contains MISMATCH; full output:\n%s", out)
+	}
+	// Must contain the 213 reply echo.
+	if !strings.Contains(out, "213 SHA-256 0-") {
+		t.Errorf("client stdout missing 213 reply echo; full output:\n%s", out)
+	}
+
+	// Sanity: the client also printed the HASH command it sent and the
+	// 'Hybrid FTP Ready.' greeting.
+	for _, want := range []string{"Hybrid FTP Ready.", "230 Login successful.", "221 Goodbye."} {
+		if !strings.Contains(out, want) {
+			t.Errorf("client stdout missing %q; full output:\n%s", want, out)
+		}
+	}
+}
+
+// TestE2E_ClientCLI_HASH_Mismatch verifies the negative path: when the local
+// file's content differs from the server's file, the client must print
+// MISMATCH! and show both hashes.
+//
+// The local and server file must use the SAME name (the client sends that
+// name to the server, which looks it up in its own root).
+func TestE2E_ClientCLI_HASH_Mismatch(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	localDir := t.TempDir()
+	const name = "mismatch.txt"
+	localContent := []byte("LOCAL content, not equal to server\n")
+	if err := os.WriteFile(filepath.Join(localDir, name), localContent, 0644); err != nil {
+		t.Fatalf("write local file: %v", err)
+	}
+
+	serverContent := []byte("SERVER content, different bytes\n")
+	if err := os.WriteFile(filepath.Join(rootDir, name), serverContent, 0644); err != nil {
+		t.Fatalf("write server file: %v", err)
+	}
+
+	cmd := exec.Command(clientBin, "-host", "127.0.0.1", "-ctrl", ctrlPort)
+	cmd.Dir = localDir
+	cmd.Stderr = os.Stderr
+
+	stdin := strings.NewReader("USER admin\r\nPASS admin\r\nPASV\r\nHASH " + name + "\r\nQUIT\r\n")
+	cmd.Stdin = stdin
+
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("client run: %v", err)
+	}
+
+	out := stdout.String()
+
+	if !strings.Contains(out, "MISMATCH!") {
+		t.Errorf("client stdout missing MISMATCH!; full output:\n%s", out)
+	}
+	if !strings.Contains(out, "Local:") || !strings.Contains(out, "Remote:") {
+		t.Errorf("client stdout missing Local:/Remote: hash lines; full output:\n%s", out)
+	}
+	// The two hashes must differ.
+	localHash, _ := computeSHA256Hex(localContent)
+	remoteHash, _ := computeSHA256Hex(serverContent)
+	if localHash == remoteHash {
+		t.Fatalf("test setup invalid: hashes are equal %s", localHash)
+	}
+	if !strings.Contains(out, localHash) {
+		t.Errorf("client stdout missing local hash %q; full output:\n%s", localHash, out)
+	}
+	if !strings.Contains(out, remoteHash) {
+		t.Errorf("client stdout missing remote hash %q; full output:\n%s", remoteHash, out)
+	}
+	// And not the match line.
+	if strings.Contains(out, "Hashes match - file integrity verified.") {
+		t.Errorf("client stdout unexpectedly contains 'Hashes match' for mismatched files; full output:\n%s", out)
+	}
+}
+
+func computeSHA256Hex(b []byte) (string, error) {
+	h := sha256.Sum256(b)
+	return fmt.Sprintf("%x", h), nil
 }
 
 func doRDTDownloadString(t *testing.T, host string, port int) string {
