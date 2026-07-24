@@ -106,18 +106,34 @@ func main() {
 					fmt.Printf("PASV parse error: %v\n", parseErr)
 				} else {
 					setupPASVConnection(ip, port)
+					connDataMode = modePASV
 				}
 			}
 
 		case tcpctrl.CmdLIST:
+			if connDataMode == modeNone {
+				fmt.Println("Use PASV or PORT first.")
+				fmt.Print("ftp> ")
+				continue
+			}
 			ensurePASV(conn)
 			handleList(conn)
 
 		case tcpctrl.CmdRETR:
+			if connDataMode == modeNone {
+				fmt.Println("Use PASV or PORT first.")
+				fmt.Print("ftp> ")
+				continue
+			}
 			ensurePASV(conn)
 			handleRETR(conn, strings.TrimSpace(line[5:]))
 
 		case tcpctrl.CmdSTOR:
+			if connDataMode == modeNone {
+				fmt.Println("Use PASV or PORT first.")
+				fmt.Print("ftp> ")
+				continue
+			}
 			ensurePASV(conn)
 			handleSTOR(conn, strings.TrimSpace(line[5:]))
 
@@ -149,12 +165,13 @@ func main() {
 type dataMode int
 
 const (
-	modePASV dataMode = iota
+	modeNone dataMode = iota
+	modePASV
 	modePORT
 )
 
 var (
-	connDataMode    = modePASV
+	connDataMode    = modeNone
 	portUDPConn     *net.UDPConn
 	currentPASVHost string
 	currentPASVPort int
@@ -192,6 +209,9 @@ func ensurePASV(conn net.Conn) {
 	if connDataMode == modePORT || (connDataMode == modePASV && currentPASVHost != "") {
 		return
 	}
+	if connDataMode == modeNone {
+		return
+	}
 	io.WriteString(conn, "PASV\r\n")
 	reply, err := tcpctrl.ReadLine(conn)
 	if err != nil {
@@ -203,7 +223,6 @@ func ensurePASV(conn net.Conn) {
 			setupPASVConnection(ip, port)
 		}
 	}
-	connDataMode = modePASV
 }
 
 func prepareDataTransfer() (*net.UDPConn, func(), error) {
@@ -225,12 +244,11 @@ func prepareDataTransfer() (*net.UDPConn, func(), error) {
 		return udpConn, cleanup, nil
 	case modePORT:
 		if portUDPConn == nil {
-			return nil, nil, fmt.Errorf("no PORT socket; use PORT first")
+			return nil, nil, fmt.Errorf("no PORT socket; send PORT first")
 		}
 		cleanup := func() {
 			portUDPConn.Close()
 			portUDPConn = nil
-			connDataMode = modePASV
 		}
 		return portUDPConn, cleanup, nil
 	default:
