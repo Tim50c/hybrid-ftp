@@ -482,13 +482,6 @@ func handleSTOR(conn net.Conn, filename string) {
 		return
 	}
 
-	io.WriteString(conn, "STOR "+filename+"\r\n")
-	reply, _ := tcpctrl.ReadLine(conn)
-	fmt.Println(reply)
-	if !strings.HasPrefix(reply, "150") {
-		return
-	}
-
 	localFile, err := os.Open(filename)
 	if err != nil {
 		fmt.Printf("Cannot open local file: %v\n", err)
@@ -499,6 +492,13 @@ func handleSTOR(conn net.Conn, filename string) {
 	fileInfo, err := localFile.Stat()
 	if err != nil {
 		fmt.Printf("Cannot stat local file: %v\n", err)
+		return
+	}
+
+	io.WriteString(conn, "STOR "+filename+"\r\n")
+	reply, _ := tcpctrl.ReadLine(conn)
+	fmt.Println(reply)
+	if !strings.HasPrefix(reply, "150") {
 		return
 	}
 
@@ -608,13 +608,6 @@ func handleSTOU(conn net.Conn, filename string) {
 		return
 	}
 
-	io.WriteString(conn, "STOU "+filename+"\r\n")
-	reply, _ := tcpctrl.ReadLine(conn)
-	fmt.Println(reply)
-	if !strings.HasPrefix(reply, "150") {
-		return
-	}
-
 	localFile, err := os.Open(filename)
 	if err != nil {
 		fmt.Printf("Cannot open local file: %v\n", err)
@@ -625,6 +618,13 @@ func handleSTOU(conn net.Conn, filename string) {
 	fileInfo, err := localFile.Stat()
 	if err != nil {
 		fmt.Printf("Cannot stat local file: %v\n", err)
+		return
+	}
+
+	io.WriteString(conn, "STOU "+filename+"\r\n")
+	reply, _ := tcpctrl.ReadLine(conn)
+	fmt.Println(reply)
+	if !strings.HasPrefix(reply, "150") {
 		return
 	}
 
@@ -690,13 +690,6 @@ func handleAPPE(conn net.Conn, filename string) {
 		return
 	}
 
-	io.WriteString(conn, "APPE "+filename+"\r\n")
-	reply, _ := tcpctrl.ReadLine(conn)
-	fmt.Println(reply)
-	if !strings.HasPrefix(reply, "150") {
-		return
-	}
-
 	localFile, err := os.Open(filename)
 	if err != nil {
 		fmt.Printf("Cannot open local file: %v\n", err)
@@ -707,6 +700,13 @@ func handleAPPE(conn net.Conn, filename string) {
 	fileInfo, err := localFile.Stat()
 	if err != nil {
 		fmt.Printf("Cannot stat local file: %v\n", err)
+		return
+	}
+
+	io.WriteString(conn, "APPE "+filename+"\r\n")
+	reply, _ := tcpctrl.ReadLine(conn)
+	fmt.Println(reply)
+	if !strings.HasPrefix(reply, "150") {
 		return
 	}
 
