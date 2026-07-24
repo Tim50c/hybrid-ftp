@@ -191,24 +191,25 @@ func ModTime(filePath string) (time.Time, error) {
 	return info.ModTime(), nil
 }
 
-func StatPath(root string, sess *session.Session, path string) (string, error) {
+func StatPath(root string, sess *session.Session, path string) (string, bool, error) {
 	fullPath, err := ResolveSafe(root, sess, path)
 	if err != nil {
-		return "", fmt.Errorf("stat: %w", err)
+		return "", false, fmt.Errorf("stat: %w", err)
 	}
 	info, err := os.Stat(fullPath)
 	if err != nil {
-		return "", fmt.Errorf("stat: %w", err)
+		return "", false, fmt.Errorf("stat: %w", err)
 	}
+	isDir := info.IsDir()
 	var result string
-	if info.IsDir() {
-		result = fmt.Sprintf("Directory: %s\r\nPermissions: %s\r\nModified: %s\r\n",
+	if isDir {
+		result = fmt.Sprintf("Directory: %s | Permissions: %s | Modified: %s",
 			info.Name(), info.Mode(), info.ModTime().Format("20060102150405"))
 	} else {
-		result = fmt.Sprintf("File: %s\r\nSize: %d bytes\r\nPermissions: %s\r\nModified: %s\r\n",
+		result = fmt.Sprintf("File: %s | Size: %d bytes | Permissions: %s | Modified: %s",
 			info.Name(), info.Size(), info.Mode(), info.ModTime().Format("20060102150405"))
 	}
-	return result, nil
+	return result, isDir, nil
 }
 
 func OpenForAppend(filePath string) (*os.File, error) {

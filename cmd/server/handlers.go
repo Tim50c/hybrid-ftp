@@ -18,6 +18,16 @@ import (
 	"hybrid-ftp/internal/tcpctrl"
 )
 
+func isValidFilename(name string) bool {
+	if strings.TrimSpace(name) == "" {
+		return false
+	}
+	if strings.ContainsRune(name, 0) {
+		return false
+	}
+	return true
+}
+
 func setupDataSender(sess *session.Session) (*rdt.Sender, error) {
 	if sess.DataMode == "PORT" {
 		udpConn, err := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
@@ -231,6 +241,10 @@ func handleLIST(conn net.Conn, sess *session.Session, root string, args string) 
 }
 
 func handleRETR(conn net.Conn, sess *session.Session, root string, args string) {
+	if !isValidFilename(args) {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFilenameNotAllowed, "Filename not allowed.")
+		return
+	}
 	fullPath, err := fs.ResolveSafe(root, sess, args)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
@@ -292,6 +306,10 @@ func handleRETR(conn net.Conn, sess *session.Session, root string, args string) 
 }
 
 func handleSTOR(conn net.Conn, sess *session.Session, root string, args string) {
+	if !isValidFilename(args) {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFilenameNotAllowed, "Filename not allowed.")
+		return
+	}
 	fullPath, err := fs.ResolveSafe(root, sess, args)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
@@ -385,6 +403,10 @@ func handleDELE(conn net.Conn, sess *session.Session, root string, args string) 
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "DELE requires a filename.")
 		return
 	}
+	if !isValidFilename(args) {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFilenameNotAllowed, "Filename not allowed.")
+		return
+	}
 	if err := fs.DeleteFile(root, sess, args); err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot delete file.")
 		return
@@ -423,12 +445,16 @@ func handleSTAT(conn net.Conn, sess *session.Session, root string, args string) 
 		tcpctrl.WriteReply(conn, tcpctrl.ReplySystemStatus, "Hybrid FTP server status: running.")
 		return
 	}
-	info, err := fs.StatPath(root, sess, args)
+	info, isDir, err := fs.StatPath(root, sess, args)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot stat path.")
 		return
 	}
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileStatus, strings.TrimRight(info, "\r\n"))
+	code := tcpctrl.ReplyFileStatus
+	if isDir {
+		code = tcpctrl.ReplyDirStatus
+	}
+	tcpctrl.WriteReply(conn, code, strings.TrimRight(info, "\r\n"))
 }
 
 func handleSIZE(conn net.Conn, sess *session.Session, root string, args string) {
@@ -610,6 +636,10 @@ func handleHASH(conn net.Conn, sess *session.Session, root string, args string) 
 func handleRNFR(conn net.Conn, sess *session.Session, root string, args string) {
 	if args == "" {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "RNFR requires a filename.")
+		return
+	}
+	if !isValidFilename(args) {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFilenameNotAllowed, "Filename not allowed.")
 		return
 	}
 	if err := fs.RenameFrom(root, sess, args); err != nil {

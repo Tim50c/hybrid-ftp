@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -26,8 +27,12 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	serverBin = filepath.Join(os.TempDir(), "hybrid-ftp-server-test")
-	clientBin = filepath.Join(os.TempDir(), "hybrid-ftp-client-test")
+	binSuffix := ""
+	if runtime.GOOS == "windows" {
+		binSuffix = ".exe"
+	}
+	serverBin = filepath.Join(os.TempDir(), "hybrid-ftp-server-test"+binSuffix)
+	clientBin = filepath.Join(os.TempDir(), "hybrid-ftp-client-test"+binSuffix)
 
 	if err := exec.Command("go", "build", "-o", serverBin, "../../cmd/server").Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "cannot build server: %v\n", err)
@@ -75,7 +80,14 @@ func startServer(t *testing.T) (*exec.Cmd, func()) {
 
 	return cmd, func() {
 		cmd.Process.Signal(os.Interrupt)
-		cmd.Wait()
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			cmd.Process.Kill()
+			<-done
+		}
 	}
 }
 
@@ -822,6 +834,54 @@ func TestE2E_ConcurrentSessions(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestE2E_STAT(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	if r := fc.sendAndRead(t, "STAT"); !strings.HasPrefix(r, "211") {
+		t.Errorf("STAT (no args): expected 211, got %s", r)
+	}
+
+	os.WriteFile(filepath.Join(rootDir, "statfile.txt"), []byte("stat me"), 0644)
+	if r := fc.sendAndRead(t, "STAT statfile.txt"); !strings.HasPrefix(r, "213") {
+		t.Errorf("STAT (file): expected 213, got %s", r)
+	}
+
+	os.MkdirAll(filepath.Join(rootDir, "statdir"), 0755)
+	if r := fc.sendAndRead(t, "STAT statdir"); !strings.HasPrefix(r, "212") {
+		t.Errorf("STAT (dir): expected 212, got %s", r)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_ABOR(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	if r := fc.sendAndRead(t, "ABOR"); !strings.HasPrefix(r, "226") {
+		t.Errorf("ABOR (no transfer): expected 226, got %s", r)
+	}
+
+	fc.sendAndRead(t, "QUIT")
 }
 
 func doRDTDownloadString(t *testing.T, host string, port int) string {

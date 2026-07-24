@@ -44,7 +44,6 @@ func main() {
 		log.Printf("[CTRL] shutting down...")
 		listener.Close()
 		for _, s := range mgr.List() {
-			tcpctrl.WriteReply(s.Conn, 421, "Service not available, closing.")
 			s.Cancel()
 		}
 	}()
