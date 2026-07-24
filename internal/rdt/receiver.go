@@ -32,6 +32,7 @@ type Receiver struct {
 	output      chan []byte
 	outputDone  bool
 	done        chan struct{}
+	closeOnce   sync.Once
 }
 
 func NewReceiver(conn *net.UDPConn, sessionID uint32) *Receiver {
@@ -153,26 +154,9 @@ func (r *Receiver) Receive() <-chan []byte {
 }
 
 func (r *Receiver) Close() error {
-	r.mu.Lock()
-	close(r.done)
-	state := r.state
-	r.mu.Unlock()
-
-	if state == recvFinWaiting {
-		r.mu.Lock()
-		if err := r.sendControl(0, r.rcvBase, FlagFIN|FlagACK); err != nil {
-			r.mu.Unlock()
-			return fmt.Errorf("close finack: %w", err)
-		}
-		r.mu.Unlock()
-		time.Sleep(100 * time.Millisecond)
-	}
-	r.mu.Lock()
-	if !r.outputDone {
-		close(r.output)
-		r.outputDone = true
-	}
-	r.mu.Unlock()
+	r.closeOnce.Do(func() {
+		close(r.done)
+	})
 	return nil
 }
 
@@ -224,8 +208,34 @@ func (r *Receiver) windowAvailable() uint16 {
 
 func (r *Receiver) receiveLoop() {
 	log.Printf("[RDT] receiver loop started, session=%d", r.sessionID)
+	var postFinDeadline time.Time
 	defer func() {
 		r.mu.Lock()
+		var flushChunks [][]byte
+		for {
+			chunk, ok := r.recvBuffer[r.rcvBase]
+			if !ok {
+				break
+			}
+			flushChunks = append(flushChunks, chunk)
+			r.rcvBase += uint32(len(chunk))
+			delete(r.recvBuffer, r.rcvBase-uint32(len(chunk)))
+		}
+		r.mu.Unlock()
+
+		for _, chunk := range flushChunks {
+			select {
+			case r.output <- chunk:
+			case <-r.done:
+				goto closed
+			}
+		}
+	closed:
+		r.mu.Lock()
+		if r.state == recvFinWaiting {
+			r.sendControl(0, r.rcvBase, FlagFIN|FlagACK)
+			time.Sleep(100 * time.Millisecond)
+		}
 		if !r.outputDone {
 			close(r.output)
 			r.outputDone = true
@@ -244,6 +254,9 @@ func (r *Receiver) receiveLoop() {
 		n, _, err := r.conn.ReadFromUDP(buf)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				if !postFinDeadline.IsZero() && time.Now().After(postFinDeadline) {
+					return
+				}
 				continue
 			}
 			log.Printf("[RDT] receiver read error: %v", err)
@@ -278,8 +291,15 @@ func (r *Receiver) receiveLoop() {
 		case hdr.Flags&FlagFIN != 0:
 			log.Printf("[RDT] receiver got FIN")
 			r.state = recvFinWaiting
+			r.sendControl(0, r.rcvBase, FlagFIN|FlagACK)
 			r.mu.Unlock()
-			return
+			r.mu.Lock()
+			hasBuffered := len(r.recvBuffer) > 0
+			r.mu.Unlock()
+			if !hasBuffered {
+				return
+			}
+			postFinDeadline = time.Now().Add(2 * time.Second)
 
 		case hdr.Flags&FlagDATA != 0:
 			r.handleData(hdr, payload)
