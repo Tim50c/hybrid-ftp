@@ -110,12 +110,15 @@ func main() {
 			}
 
 		case tcpctrl.CmdLIST:
+			ensurePASV(conn)
 			handleList(conn)
 
 		case tcpctrl.CmdRETR:
+			ensurePASV(conn)
 			handleRETR(conn, strings.TrimSpace(line[5:]))
 
 		case tcpctrl.CmdSTOR:
+			ensurePASV(conn)
 			handleSTOR(conn, strings.TrimSpace(line[5:]))
 
 		case tcpctrl.CmdHASH:
@@ -183,6 +186,24 @@ func parsePASV(reply string) (string, int, error) {
 func setupPASVConnection(host string, port int) {
 	currentPASVHost = host
 	currentPASVPort = port
+}
+
+func ensurePASV(conn net.Conn) {
+	if connDataMode == modePORT || (connDataMode == modePASV && currentPASVHost != "") {
+		return
+	}
+	io.WriteString(conn, "PASV\r\n")
+	reply, err := tcpctrl.ReadLine(conn)
+	if err != nil {
+		return
+	}
+	if strings.HasPrefix(reply, "227") {
+		ip, port, parseErr := parsePASV(reply)
+		if parseErr == nil {
+			setupPASVConnection(ip, port)
+		}
+	}
+	connDataMode = modePASV
 }
 
 func prepareDataTransfer() (*net.UDPConn, func(), error) {
