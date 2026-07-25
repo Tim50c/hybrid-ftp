@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
-	"sync"
 	"testing"
 	"time"
 )
@@ -30,48 +29,9 @@ func makeRDTDataPacket(t *testing.T, sessionID, seqNum uint32, payload []byte) [
 	return encoded
 }
 
-// runReceiver starts a receiver on the given UDP conn and writes all
-// delivered chunks to the returned channel. It returns the receiver and
-// a stop function that closes the receiver and waits for the goroutine.
-func runReceiver(t *testing.T, conn *net.UDPConn, sessionID uint32, isServer bool) (*Receiver, func()) {
-	t.Helper()
-	r := NewReceiver(conn, sessionID)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	readyCh := make(chan struct{})
-
-	// We use a goroutine to drive Accept/Connect and signal when ready.
-	// But for this test we don't need the 3-way handshake; we can drive
-	// the receiver manually by calling its internal methods. However, the
-	// receiveLoop is started by Accept/Connect. So we need at least one
-	// of those.
-	//
-	// Since this is a test for the receiveLoop's flush-on-exit behavior,
-	// we don't need the full handshake. We can:
-	//   1. Set state to recvEstablished directly
-	//   2. Start the receiveLoop manually
-	//
-	// The receiveLoop is unexported, so we have to go through Accept/Connect.
-	// For simplicity, use Connect on the client side and accept on the server.
-	_ = isServer
-
-	// We can't easily call receiveLoop directly. Instead, we'll use Connect()
-	// and drive the handshake ourselves by sending the expected packets from
-	// the other side.
-	//
-	// Actually for this test, the simplest path is:
-	// - Use the receiver's Accept() or Connect() which starts the receiveLoop
-	// - Send the handshake packets from a peer
-	// - Then send the data packets out of order
-	// - Then send FIN
-	// - Verify the output channel has all the data
-
-	_ = r
-	_ = wg
-	_ = readyCh
-
-	return r, func() {}
-}
+// runReceiver removed — dead code that copied a sync.WaitGroup lock value,
+// causing a go vet warning (copylocks). The real integration test,
+// TestReceiver_FlushesBufferedOnExit, inlines the full handshake instead.
 
 // TestReceiver_FlushesBufferedOnExit is the targeted regression test for the
 // bug where the receiveLoop returns on FIN without flushing r.recvBuffer.
