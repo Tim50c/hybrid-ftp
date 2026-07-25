@@ -37,7 +37,8 @@ type Sender struct {
 	state      senderState
 	sendBase   uint32
 	nextSeqNum uint32
-	recvWindow uint16
+	recvWindow uint32
+	peerScale  uint8
 	inflight   map[uint32]*packetRecord
 	timers     *TimerManager
 	bbr        *BBR
@@ -101,7 +102,8 @@ func (s *Sender) Connect(addr *net.UDPAddr) error {
 		}
 
 		s.mu.Lock()
-		s.recvWindow = hdr.Window
+		s.peerScale = WindowScale(hdr.Flags)
+		s.recvWindow = hdr.EffectiveWindow()
 		s.sendBase = myISN + 1
 		s.nextSeqNum = myISN + 1
 		if err := s.sendControl(0, hdr.SeqNum+1, FlagACK); err != nil {
@@ -139,7 +141,8 @@ func (s *Sender) Accept() error {
 
 		s.mu.Lock()
 		s.remoteAddr = addr
-		s.recvWindow = hdr.Window
+		s.peerScale = WindowScale(hdr.Flags)
+		s.recvWindow = hdr.EffectiveWindow()
 		myISN := uint32(rand.Int31())
 		s.sendBase = myISN + 1
 		s.nextSeqNum = myISN + 1
@@ -218,7 +221,7 @@ func (s *Sender) sendControl(seqNum, ackNum uint32, flags uint8) error {
 		AckNum:     ackNum,
 		Flags:      flags,
 		PayloadLen: 0,
-		Window:     65535,
+		RawWindow:  65535,
 	}
 	encoded, err := h.Encode(nil)
 	if err != nil {
@@ -282,7 +285,7 @@ func (s *Sender) sendLoop() {
 				AckNum:     0,
 				Flags:      FlagDATA,
 				PayloadLen: uint16(chunkLen),
-				Window:     65535,
+				RawWindow:  65535,
 			}
 			encoded, _ := h.Encode(chunk)
 			checksum := ComputeChecksum(encoded)
@@ -371,7 +374,7 @@ func (s *Sender) recvLoop() {
 			return
 
 		case hdr.Flags&FlagACK != 0:
-			s.recvWindow = hdr.Window
+			s.recvWindow = hdr.EffectiveWindow()
 			s.processAck(hdr.AckNum)
 			s.mu.Unlock()
 

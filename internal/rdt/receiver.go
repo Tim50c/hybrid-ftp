@@ -27,7 +27,8 @@ type Receiver struct {
 	state       receiverState
 	rcvBase     uint32
 	recvBuffer  map[uint32][]byte
-	recvWindow  uint16
+	recvWindow  uint32
+	myScale     uint8
 	maxBuffer   int
 	output      chan []byte
 	outputDone  bool
@@ -36,12 +37,18 @@ type Receiver struct {
 }
 
 func NewReceiver(conn *net.UDPConn, sessionID uint32) *Receiver {
+	const baseWindow = 256 * 1024
+	scale := uint8(0)
+	for (uint32(65535) << scale) < baseWindow && scale < 7 {
+		scale++
+	}
 	return &Receiver{
 		conn:       conn,
 		sessionID:  sessionID,
 		state:      recvClosed,
 		recvBuffer: make(map[uint32][]byte),
-		recvWindow: 65535,
+		recvWindow: baseWindow,
+		myScale:    scale,
 		maxBuffer:  1000,
 		output:     make(chan []byte, 100),
 		done:       make(chan struct{}),
@@ -165,10 +172,11 @@ func (r *Receiver) sendControl(seqNum, ackNum uint32, flags uint8) error {
 		SessionID:  r.sessionID,
 		SeqNum:     seqNum,
 		AckNum:     ackNum,
-		Flags:      flags,
+		Flags:      0,
 		PayloadLen: 0,
-		Window:     r.recvWindow,
 	}
+	h.SetWindow(r.recvWindow, r.myScale)
+	h.Flags |= flags
 	encoded, err := h.Encode(nil)
 	if err != nil {
 		return fmt.Errorf("encode control: %w", err)
@@ -184,22 +192,24 @@ func (r *Receiver) sendControl(seqNum, ackNum uint32, flags uint8) error {
 }
 
 func (r *Receiver) sendAck(ackNum uint32) {
+	avail := r.windowAvailable()
 	h := &Header{
 		SessionID:  r.sessionID,
 		SeqNum:     0,
 		AckNum:     ackNum,
-		Flags:      FlagACK,
+		Flags:      0,
 		PayloadLen: 0,
-		Window:     r.windowAvailable(),
 	}
+	h.SetWindow(uint32(avail), r.myScale)
+	h.Flags |= FlagACK
 	encoded, _ := h.Encode(nil)
 	checksum := ComputeChecksum(encoded)
 	binary.BigEndian.PutUint32(encoded[17:21], checksum)
 	r.conn.WriteToUDP(encoded, r.remoteAddr)
 }
 
-func (r *Receiver) windowAvailable() uint16 {
-	buffered := uint16(len(r.recvBuffer) * 1400)
+func (r *Receiver) windowAvailable() uint32 {
+	buffered := uint32(len(r.recvBuffer) * 1400)
 	if buffered > r.recvWindow {
 		return 0
 	}

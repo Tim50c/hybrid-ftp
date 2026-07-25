@@ -19,7 +19,7 @@ func makeRDTDataPacket(t *testing.T, sessionID, seqNum uint32, payload []byte) [
 		SeqNum:     seqNum,
 		Flags:      FlagDATA,
 		PayloadLen: uint16(len(payload)),
-		Window:     65535,
+		RawWindow:  65535,
 	}
 	encoded, err := h.Encode(payload)
 	if err != nil {
@@ -130,7 +130,7 @@ func TestReceiver_FlushesBufferedOnExit(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	myISN := uint32(0xDEADBEEF)
-	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, Window: 65535}
+	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, RawWindow: 65535}
 	synBytes, _ := syn.Encode(nil)
 	cs := ComputeChecksum(synBytes)
 	binary.BigEndian.PutUint32(synBytes[17:21], cs)
@@ -157,7 +157,7 @@ func TestReceiver_FlushesBufferedOnExit(t *testing.T) {
 	serverISN := synAckHdr.SeqNum
 
 	// Send ACK to complete the 3-way handshake.
-	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, Window: 65535}
+	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, RawWindow: 65535}
 	ackBytes, _ := ack.Encode(nil)
 	cs = ComputeChecksum(ackBytes)
 	binary.BigEndian.PutUint32(ackBytes[17:21], cs)
@@ -211,7 +211,7 @@ func TestReceiver_FlushesBufferedOnExit(t *testing.T) {
 	}
 
 	// Send FIN.
-	fin := &Header{SessionID: sessionID, Flags: FlagFIN, Window: 65535}
+	fin := &Header{SessionID: sessionID, Flags: FlagFIN, RawWindow: 65535}
 	finBytes, _ := fin.Encode(nil)
 	cs = ComputeChecksum(finBytes)
 	binary.BigEndian.PutUint32(finBytes[17:21], cs)
