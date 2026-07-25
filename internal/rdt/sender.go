@@ -198,7 +198,27 @@ func (s *Sender) Close() error {
 	s.state = sendFinSent
 	s.mu.Unlock()
 
-	time.Sleep(100 * time.Millisecond)
+	for {
+		select {
+		case <-s.done:
+			return nil
+		default:
+		}
+		outboxDrained := len(s.outbox) == 0
+		s.mu.Lock()
+		inflightDrained := len(s.inflight) == 0
+		s.mu.Unlock()
+		if outboxDrained && inflightDrained {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	select {
+	case <-s.done:
+		return nil
+	case <-time.After(100 * time.Millisecond):
+	}
 
 	if err := s.sendControl(0, 0, FlagFIN); err != nil {
 		return fmt.Errorf("close fin: %w", err)
