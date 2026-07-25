@@ -152,6 +152,13 @@ func DeleteFile(root string, sess *session.Session, filename string) error {
 	if err != nil {
 		return fmt.Errorf("delete file: %w", err)
 	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		return fmt.Errorf("delete file: %w", err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("cannot delete a directory: %s", filename)
+	}
 	if err := os.Remove(fullPath); err != nil {
 		return fmt.Errorf("delete file: %w", err)
 	}

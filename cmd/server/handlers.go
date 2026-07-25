@@ -100,6 +100,7 @@ func dataModeReady(sess *session.Session) bool {
 
 func handleUSER(conn net.Conn, sess *session.Session, usersPath string, args string) {
 	sess.Username = args
+	sess.Authenticated = false
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyNeedPassword, "Password required.")
 }
 
@@ -133,12 +134,17 @@ func handleCWD(conn net.Conn, sess *session.Session, root string, args string) {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
 		return
 	}
+	resolved := fs.ResolvePath(sess, args)
+	if resolved == sess.CWD && strings.Contains(args, "..") {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
+		return
+	}
 	info, err := os.Stat(fullPath)
 	if err != nil || !info.IsDir() {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Directory not found.")
 		return
 	}
-	sess.CWD = fs.ResolvePath(sess, args)
+	sess.CWD = resolved
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileActionOK, "Directory changed.")
 }
 
@@ -222,17 +228,18 @@ func handleLIST(conn net.Conn, sess *session.Session, root string, args string) 
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
 		return
 	}
+
+	if !dataModeReady(sess) {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		return
+	}
+
 	infos, err := fs.ListDir(fullPath)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot list directory.")
 		return
 	}
 	listing := fs.FormatList(infos)
-
-	if !dataModeReady(sess) {
-		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
-		return
-	}
 
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, "Opening data connection for directory listing.")
 
@@ -400,6 +407,10 @@ func handleCDUP(conn net.Conn, sess *session.Session, root string, args string) 
 func handleMKD(conn net.Conn, sess *session.Session, root string, args string) {
 	if args == "" {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "MKD requires a directory name.")
+		return
+	}
+	if strings.Contains(args, "..") {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
 		return
 	}
 	if err := fs.MakeDir(root, sess, args); err != nil {
