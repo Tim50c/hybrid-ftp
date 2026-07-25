@@ -1300,4 +1300,112 @@ func doRDTDownload(t *testing.T, host string, port int) ([]byte, error) {
 	}
 }
 
+func TestE2E_PASV_MultiTransfer(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	os.WriteFile(filepath.Join(rootDir, "first.txt"), []byte("first file content\n"), 0644)
+	os.WriteFile(filepath.Join(rootDir, "second.txt"), []byte("second file content\n"), 0644)
+
+	reply := fc.sendAndRead(t, "PASV")
+	if !strings.HasPrefix(reply, "227") {
+		t.Fatalf("PASV: expected 227, got %s", reply)
+	}
+	host, port, err := parsePASVReply(reply)
+	if err != nil {
+		t.Fatalf("parse PASV: %v", err)
+	}
+
+	r := fc.sendAndRead(t, "RETR first.txt")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("first RETR: expected 150, got %s", r)
+	}
+	data1, err := doRDTDownload(t, host, port)
+	if err != nil {
+		t.Fatalf("first download: %v", err)
+	}
+	if !bytes.Equal(data1, []byte("first file content\n")) {
+		t.Errorf("first file mismatch: got %q", string(data1))
+	}
+	time.Sleep(500 * time.Millisecond)
+	fc.readReply(t)
+
+	r = fc.sendAndRead(t, "RETR second.txt")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("second RETR: expected 150, got %s", r)
+	}
+	data2, err := doRDTDownload(t, host, port)
+	if err != nil {
+		t.Fatalf("second download: %v", err)
+	}
+	if !bytes.Equal(data2, []byte("second file content\n")) {
+		t.Errorf("second file mismatch: got %q", string(data2))
+	}
+	time.Sleep(500 * time.Millisecond)
+	fc.readReply(t)
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_PASV_UploadThenDownload(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	payload := []byte("upload then download test payload\n")
+
+	reply := fc.sendAndRead(t, "PASV")
+	if !strings.HasPrefix(reply, "227") {
+		t.Fatalf("PASV: expected 227, got %s", reply)
+	}
+	host, port, _ := parsePASVReply(reply)
+
+	r := fc.sendAndRead(t, "STOR up.bin")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("STOR: expected 150, got %s", r)
+	}
+	addr := fmt.Sprintf("%s:%d", host, port)
+	udpAddr, _ := net.ResolveUDPAddr("udp", addr)
+	udpConn, _ := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
+	sender := rdt.NewSender(udpConn, 1)
+	sender.Connect(udpAddr)
+	sender.Send(payload)
+	time.Sleep(200 * time.Millisecond)
+	sender.Close()
+	udpConn.Close()
+
+	time.Sleep(500 * time.Millisecond)
+	fc.readReply(t)
+
+	r = fc.sendAndRead(t, "RETR up.bin")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("RETR after STOR: expected 150, got %s", r)
+	}
+	data, err := doRDTDownload(t, host, port)
+	if err != nil {
+		t.Fatalf("download after upload: %v", err)
+	}
+	if !bytes.Equal(data, payload) {
+		t.Errorf("data mismatch: got %d bytes, want %d bytes", len(data), len(payload))
+	}
+	time.Sleep(500 * time.Millisecond)
+	fc.readReply(t)
+
+	fc.sendAndRead(t, "QUIT")
+}
 
