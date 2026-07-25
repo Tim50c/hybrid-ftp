@@ -81,11 +81,14 @@ func setupDataReceiver(sess *session.Session) (*rdt.Receiver, error) {
 }
 
 func cleanupDataConn(sess *session.Session) {
-	if sess.DataConn != nil {
-		sess.DataConn.Close()
-		sess.DataConn = nil
+	if sess.DataMode == "PORT" {
+		if sess.DataConn != nil {
+			sess.DataConn.Close()
+			sess.DataConn = nil
+		}
+		sess.DataMode = ""
+		sess.DataAddr = nil
 	}
-	sess.DataMode = ""
 }
 
 func dataModeReady(sess *session.Session) bool {
@@ -248,7 +251,6 @@ func handleLIST(conn net.Conn, sess *session.Session, root string, args string) 
 
 	serverSender.Send([]byte(listing))
 	serverSender.Close()
-	cleanupDataConn(sess)
 
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Directory listing complete.")
 }
@@ -320,7 +322,6 @@ func handleRETR(conn net.Conn, sess *session.Session, root string, args string) 
 		}
 	}
 	serverSender.Close()
-	cleanupDataConn(sess)
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Transfer complete.")
 }
 
@@ -380,7 +381,6 @@ func handleSTOR(conn net.Conn, sess *session.Session, root string, args string) 
 		}
 	}
 	serverReceiver.Close()
-	cleanupDataConn(sess)
 
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Transfer complete.")
 }
@@ -575,7 +575,6 @@ func handleNLST(conn net.Conn, sess *session.Session, root string, args string) 
 
 	sender.Send([]byte(listing))
 	sender.Close()
-	cleanupDataConn(sess)
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Name list complete.")
 }
 
@@ -634,7 +633,6 @@ func handleAPPE(conn net.Conn, sess *session.Session, root string, args string) 
 		}
 	}
 	receiver.Close()
-	cleanupDataConn(sess)
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Transfer complete.")
 }
 
@@ -694,7 +692,6 @@ func handleSTOU(conn net.Conn, sess *session.Session, root string, args string) 
 		}
 	}
 	receiver.Close()
-	cleanupDataConn(sess)
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyPathCreated, fmt.Sprintf("\"%s\" stored.", uniqueName))
 }
 
