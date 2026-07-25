@@ -210,22 +210,11 @@ func setupPASVConnection(host string, port int) {
 }
 
 func ensurePASV(conn net.Conn) {
-	if connDataMode == modePORT || (connDataMode == modePASV && currentPASVHost != "") {
+	if connDataMode == modePORT || connDataMode == modePASV {
 		return
 	}
 	if connDataMode == modeNone {
 		return
-	}
-	io.WriteString(conn, "PASV\r\n")
-	reply, err := tcpctrl.ReadLine(conn)
-	if err != nil {
-		return
-	}
-	if strings.HasPrefix(reply, "227") {
-		ip, port, parseErr := parsePASV(reply)
-		if parseErr == nil {
-			setupPASVConnection(ip, port)
-		}
 	}
 }
 
@@ -242,8 +231,6 @@ func prepareDataTransfer() (*net.UDPConn, func(), error) {
 		}
 		cleanup := func() {
 			udpConn.Close()
-			currentPASVHost = ""
-			currentPASVPort = 0
 		}
 		return udpConn, cleanup, nil
 	case modePORT:
