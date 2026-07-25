@@ -201,8 +201,23 @@ func (s *Sender) Close() error {
 	s.state = sendFinSent
 	s.mu.Unlock()
 
-	time.Sleep(100 * time.Millisecond)
+	drainTimeout := time.After(10 * time.Second)
+	for {
+		s.mu.Lock()
+		inflightEmpty := len(s.inflight) == 0
+		s.mu.Unlock()
+		if inflightEmpty && len(s.outbox) == 0 {
+			break
+		}
+		select {
+		case <-drainTimeout:
+			log.Printf("[RDT] sender drain timeout, forcing close")
+			goto sendFin
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 
+sendFin:
 	if err := s.sendControl(0, 0, FlagFIN); err != nil {
 		return fmt.Errorf("close fin: %w", err)
 	}
