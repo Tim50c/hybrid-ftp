@@ -389,8 +389,10 @@ func (s *Sender) processAck(ackNum uint32) {
 		return
 	}
 
-	for seq := s.sendBase; seq < ackNum; {
-		if rec, ok := s.inflight[seq]; ok {
+	seq := s.sendBase
+	for seq < ackNum {
+		rec, ok := s.inflight[seq]
+		if ok {
 			rec.done = true
 			s.timers.Cancel(seq)
 			rtt := time.Since(rec.sentAt)
@@ -398,7 +400,13 @@ func (s *Sender) processAck(ackNum uint32) {
 			delete(s.inflight, seq)
 			seq += rec.length
 		} else {
-			seq++
+			nextSeq := ackNum
+			for sKey := range s.inflight {
+				if sKey > seq && sKey < nextSeq {
+					nextSeq = sKey
+				}
+			}
+			seq = nextSeq
 		}
 	}
 
