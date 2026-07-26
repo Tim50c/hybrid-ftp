@@ -10,9 +10,9 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"hybrid-ftp/internal/rdt"
@@ -26,6 +26,10 @@ var (
 
 func main() {
 	flag.Parse()
+
+	sigCh = make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
 
 	addr := net.JoinHostPort(*serverHost, *ctrlPort)
 	conn, err := net.Dial("tcp", addr)
@@ -87,25 +91,6 @@ func main() {
 			continue
 		}
 
-		if upper == "ABOR" {
-			transferMu.Lock()
-			if transferActive && transferCancel != nil {
-				transferCancel()
-			}
-			transferMu.Unlock()
-			io.WriteString(conn, "ABOR\r\n")
-			reply, _ := tcpctrl.ReadLine(conn)
-			fmt.Println(reply)
-
-			transferMu.Lock()
-			wasActive := transferActive
-			transferMu.Unlock()
-			if !wasActive {
-				fmt.Print("ftp> ")
-			}
-			continue
-		}
-
 		cmd, _ := tcpctrl.ParseCommand(line)
 
 		isDataCmd := cmd == tcpctrl.CmdLIST || cmd == tcpctrl.CmdRETR || cmd == tcpctrl.CmdSTOR || cmd == tcpctrl.CmdNLST || cmd == tcpctrl.CmdSTOU || cmd == tcpctrl.CmdAPPE
@@ -115,7 +100,7 @@ func main() {
 			continue
 		}
 
-		if cmd != tcpctrl.CmdPORT && cmd != tcpctrl.CmdHASH && cmd != tcpctrl.CmdLIST && cmd != tcpctrl.CmdRETR && cmd != tcpctrl.CmdSTOR && cmd != tcpctrl.CmdNLST && cmd != tcpctrl.CmdSTOU && cmd != tcpctrl.CmdAPPE && cmd != tcpctrl.CmdABOR {
+		if cmd != tcpctrl.CmdPORT && cmd != tcpctrl.CmdHASH && cmd != tcpctrl.CmdLIST && cmd != tcpctrl.CmdRETR && cmd != tcpctrl.CmdSTOR && cmd != tcpctrl.CmdNLST && cmd != tcpctrl.CmdSTOU && cmd != tcpctrl.CmdAPPE {
 			if _, err := io.WriteString(conn, line+"\r\n"); err != nil {
 				log.Fatalf("write error: %v", err)
 			}
@@ -200,10 +185,7 @@ var (
 	portUDPConn     *net.UDPConn
 	currentPASVHost string
 	currentPASVPort int
-	transferCtx     context.Context
-	transferCancel  context.CancelFunc
-	transferActive  bool
-	transferMu      sync.Mutex
+	sigCh           chan os.Signal
 )
 
 func parsePASV(reply string) (string, int, error) {
@@ -274,45 +256,26 @@ func prepareDataTransfer() (*net.UDPConn, func(), error) {
 
 func handlePORT(conn net.Conn, args string) {
 	if args == "" {
-		ip4 := conn.LocalAddr().(*net.TCPAddr).IP.To4()
-		if ip4 == nil {
-			fmt.Println("PORT: IPv6 not supported")
-			return
-		}
-		udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
-		if err != nil {
-			fmt.Printf("PORT: %v\n", err)
-			return
-		}
-
-		localPort := udpConn.LocalAddr().(*net.UDPAddr).Port
-		p1, p2 := localPort/256, localPort%256
-		portCmd := fmt.Sprintf("PORT %d,%d,%d,%d,%d,%d",
-			ip4[0], ip4[1], ip4[2], ip4[3], p1, p2)
-
-		io.WriteString(conn, portCmd+"\r\n")
+		io.WriteString(conn, "PORT\r\n")
 		reply, _ := tcpctrl.ReadLine(conn)
 		fmt.Println(reply)
-
-		if strings.HasPrefix(reply, "200") {
-			connDataMode = modePORT
-			portUDPConn = udpConn
-		} else {
-			udpConn.Close()
-		}
 		return
 	}
 
 	parts := strings.Split(args, ",")
 	if len(parts) != 6 {
-		fmt.Println("PORT: requires h1,h2,h3,h4,p1,p2")
+		io.WriteString(conn, "PORT "+args+"\r\n")
+		reply, _ := tcpctrl.ReadLine(conn)
+		fmt.Println(reply)
 		return
 	}
 	nums := make([]int, 6)
 	for i, p := range parts {
 		n, err := strconv.Atoi(strings.TrimSpace(p))
 		if err != nil || n < 0 || n > 255 {
-			fmt.Println("PORT: invalid parameter(s) - each must be 0-255")
+			io.WriteString(conn, "PORT "+args+"\r\n")
+			reply, _ := tcpctrl.ReadLine(conn)
+			fmt.Println(reply)
 			return
 		}
 		nums[i] = n
@@ -453,15 +416,41 @@ func handleList(conn net.Conn, path string) {
 		}
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-sigCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	go func() { <-ctx.Done(); r.Close() }()
+
 	var listing []byte
-	for chunk := range r.Receive() {
-		listing = append(listing, chunk...)
+	recvCh := r.Receive()
+	for {
+		select {
+		case <-ctx.Done():
+			io.WriteString(conn, "ABOR\r\n")
+			reply, _ := tcpctrl.ReadLine(conn)
+			fmt.Println("\r\n" + reply)
+			goto listDone
+		case chunk, ok := <-recvCh:
+			if !ok {
+				goto listDone
+			}
+			listing = append(listing, chunk...)
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
+listDone:
 	r.Close()
 	fmt.Print(string(listing))
-
-	reply, _ = tcpctrl.ReadLine(conn)
-	fmt.Println(reply)
+	if ctx.Err() == nil {
+		reply, _ := tcpctrl.ReadLine(conn)
+		fmt.Println(reply)
+	}
 }
 
 func handleRETR(conn net.Conn, filename string) {
@@ -514,20 +503,46 @@ func handleRETR(conn net.Conn, filename string) {
 	}
 	defer localFile.Close()
 
-	progress := rdt.NewProgressBar(0)
-	for chunk := range receiver.Receive() {
-		n, err := localFile.Write(chunk)
-		if err != nil {
-			fmt.Printf("Write error: %v\n", err)
-			break
+	ctxRetr, cancelRetr := context.WithCancel(context.Background())
+	defer cancelRetr()
+	go func() {
+		select {
+		case <-sigCh:
+			cancelRetr()
+		case <-ctxRetr.Done():
 		}
-		progress.Update(n)
+	}()
+	go func() { <-ctxRetr.Done(); receiver.Close() }()
+
+	progress := rdt.NewProgressBar(0)
+	recvCh := receiver.Receive()
+	for {
+		select {
+		case <-ctxRetr.Done():
+			io.WriteString(conn, "ABOR\r\n")
+			reply, _ := tcpctrl.ReadLine(conn)
+			fmt.Println("\r\n" + reply)
+			goto retrDone
+		case chunk, ok := <-recvCh:
+			if !ok {
+				goto retrDone
+			}
+			n, err := localFile.Write(chunk)
+			if err != nil {
+				fmt.Printf("Write error: %v\n", err)
+				goto retrDone
+			}
+			progress.Update(n)
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
+retrDone:
 	receiver.Close()
 	progress.Done()
-
-	reply, _ = tcpctrl.ReadLine(conn)
-	fmt.Println(reply)
+	if ctxRetr.Err() == nil {
+		reply, _ = tcpctrl.ReadLine(conn)
+		fmt.Println(reply)
+	}
 }
 
 func handleSTOR(conn net.Conn, filename string) {
@@ -590,63 +605,56 @@ func handleSTOR(conn net.Conn, filename string) {
 		}
 	}
 
-	transferMu.Lock()
 	ctx, cancel := context.WithCancel(context.Background())
-	transferCtx = ctx
-	transferCancel = cancel
-	transferActive = true
-	transferMu.Unlock()
-
+	defer cancel()
 	go func() {
-		defer func() {
-			transferMu.Lock()
-			transferActive = false
-			transferCancel = nil
-			transferMu.Unlock()
+		select {
+		case <-sigCh:
 			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	go func() { <-ctx.Done(); sender.Close() }()
 
-			localFile.Close()
-			cleanup()
-
-			if ctx.Err() == nil {
-				reply, _ := tcpctrl.ReadLine(conn)
-				fmt.Println("\r" + reply)
-			}
-			fmt.Print("ftp> ")
-		}()
-
-		go func() {
-			<-ctx.Done()
-			cleanup()
-		}()
-
-		progress := rdt.NewProgressBar(fileInfo.Size())
-		buf := make([]byte, rdt.MSS)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			n, err := localFile.Read(buf)
-			if n > 0 {
-				if sendErr := sender.Send(buf[:n]); sendErr != nil {
-					fmt.Printf("Send error: %v\n", sendErr)
-					return
+	progress := rdt.NewProgressBar(fileInfo.Size())
+	buf := make([]byte, rdt.MSS)
+	for {
+		select {
+		case <-ctx.Done():
+			io.WriteString(conn, "ABOR\r\n")
+			reply, _ := tcpctrl.ReadLine(conn)
+			fmt.Println("\r\n" + reply)
+			goto storDone
+		default:
+		}
+		n, err := localFile.Read(buf)
+		if n > 0 {
+			if sendErr := sender.Send(buf[:n]); sendErr != nil {
+				if ctx.Err() != nil {
+					goto storDone
 				}
-				progress.Update(n)
-			}
-			if err == io.EOF {
+				fmt.Printf("Send error: %v\n", sendErr)
 				break
 			}
-			if err != nil {
-				fmt.Printf("Read error: %v\n", err)
-				return
-			}
+			progress.Update(n)
 		}
-		sender.Close()
-		progress.Done()
-	}()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Printf("Read error: %v\n", err)
+			break
+		}
+	}
+storDone:
+	sender.Close()
+	progress.Done()
+	localFile.Close()
+	cleanup()
+	if ctx.Err() == nil {
+		reply, _ := tcpctrl.ReadLine(conn)
+		fmt.Println("\r" + reply)
+	}
 }
 
 func handleNLST(conn net.Conn, path string) {
@@ -686,42 +694,42 @@ func handleNLST(conn net.Conn, path string) {
 		}
 	}
 
-	transferMu.Lock()
 	ctx, cancel := context.WithCancel(context.Background())
-	transferCtx = ctx
-	transferCancel = cancel
-	transferActive = true
-	transferMu.Unlock()
-
+	defer cancel()
 	go func() {
-		defer func() {
-			transferMu.Lock()
-			transferActive = false
-			transferCancel = nil
-			transferMu.Unlock()
+		select {
+		case <-sigCh:
 			cancel()
-
-			r.Close()
-			cleanup()
-
-			if ctx.Err() == nil {
-				reply, _ := tcpctrl.ReadLine(conn)
-				fmt.Println("\r" + reply)
-			}
-			fmt.Print("ftp> ")
-		}()
-
-		go func() {
-			<-ctx.Done()
-			cleanup()
-		}()
-
-		var listing []byte
-		for chunk := range r.Receive() {
-			listing = append(listing, chunk...)
+		case <-ctx.Done():
 		}
-		fmt.Print(string(listing))
 	}()
+	go func() { <-ctx.Done(); r.Close() }()
+
+	var listing []byte
+	recvCh := r.Receive()
+	for {
+		select {
+		case <-ctx.Done():
+			io.WriteString(conn, "ABOR\r\n")
+			reply, _ := tcpctrl.ReadLine(conn)
+			fmt.Println("\r\n" + reply)
+			goto nlstDone
+		case chunk, ok := <-recvCh:
+			if !ok {
+				goto nlstDone
+			}
+			listing = append(listing, chunk...)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+nlstDone:
+	r.Close()
+	cleanup()
+	fmt.Print(string(listing))
+	if ctx.Err() == nil {
+		reply, _ := tcpctrl.ReadLine(conn)
+		fmt.Println(reply)
+	}
 }
 
 func handleSTOU(conn net.Conn, filename string) {
@@ -780,64 +788,56 @@ func handleSTOU(conn net.Conn, filename string) {
 		}
 	}
 
-	transferMu.Lock()
 	ctx, cancel := context.WithCancel(context.Background())
-	transferCtx = ctx
-	transferCancel = cancel
-	transferActive = true
-	transferMu.Unlock()
-
+	defer cancel()
 	go func() {
-		defer func() {
-			transferMu.Lock()
-			transferActive = false
-			transferCancel = nil
-			transferMu.Unlock()
+		select {
+		case <-sigCh:
 			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	go func() { <-ctx.Done(); sender.Close() }()
 
-			localFile.Close()
-			cleanup()
-
-			if ctx.Err() == nil {
-				reply, _ := tcpctrl.ReadLine(conn)
-				fmt.Println("\r" + reply)
-			}
-			fmt.Print("ftp> ")
-		}()
-
-		go func() {
-			<-ctx.Done()
-			cleanup()
-		}()
-
-		progress := rdt.NewProgressBar(fileInfo.Size())
-		buf := make([]byte, rdt.MSS)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			n, err := localFile.Read(buf)
-			if n > 0 {
-				if sendErr := sender.Send(buf[:n]); sendErr != nil {
-					fmt.Printf("Send error: %v\n", sendErr)
-					return
+	progress := rdt.NewProgressBar(fileInfo.Size())
+	buf := make([]byte, rdt.MSS)
+	for {
+		select {
+		case <-ctx.Done():
+			io.WriteString(conn, "ABOR\r\n")
+			reply, _ := tcpctrl.ReadLine(conn)
+			fmt.Println("\r\n" + reply)
+			goto stouDone
+		default:
+		}
+		n, err := localFile.Read(buf)
+		if n > 0 {
+			if sendErr := sender.Send(buf[:n]); sendErr != nil {
+				if ctx.Err() != nil {
+					goto stouDone
 				}
-				progress.Update(n)
-			}
-			if err == io.EOF {
+				fmt.Printf("Send error: %v\n", sendErr)
 				break
 			}
-			if err != nil {
-				fmt.Printf("Read error: %v\n", err)
-				return
-			}
+			progress.Update(n)
 		}
-		time.Sleep(200 * time.Millisecond)
-		sender.Close()
-		progress.Done()
-	}()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Printf("Read error: %v\n", err)
+			break
+		}
+	}
+stouDone:
+	sender.Close()
+	progress.Done()
+	localFile.Close()
+	cleanup()
+	if ctx.Err() == nil {
+		reply, _ := tcpctrl.ReadLine(conn)
+		fmt.Println("\r" + reply)
+	}
 }
 
 func handleAPPE(conn net.Conn, filename string) {
@@ -900,62 +900,54 @@ func handleAPPE(conn net.Conn, filename string) {
 		}
 	}
 
-	transferMu.Lock()
 	ctx, cancel := context.WithCancel(context.Background())
-	transferCtx = ctx
-	transferCancel = cancel
-	transferActive = true
-	transferMu.Unlock()
-
+	defer cancel()
 	go func() {
-		defer func() {
-			transferMu.Lock()
-			transferActive = false
-			transferCancel = nil
-			transferMu.Unlock()
+		select {
+		case <-sigCh:
 			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	go func() { <-ctx.Done(); sender.Close() }()
 
-			localFile.Close()
-			cleanup()
-
-			if ctx.Err() == nil {
-				reply, _ := tcpctrl.ReadLine(conn)
-				fmt.Println("\r" + reply)
-			}
-			fmt.Print("ftp> ")
-		}()
-
-		go func() {
-			<-ctx.Done()
-			cleanup()
-		}()
-
-		progress := rdt.NewProgressBar(fileInfo.Size())
-		buf := make([]byte, rdt.MSS)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			n, err := localFile.Read(buf)
-			if n > 0 {
-				if sendErr := sender.Send(buf[:n]); sendErr != nil {
-					fmt.Printf("Send error: %v\n", sendErr)
-					return
+	progress := rdt.NewProgressBar(fileInfo.Size())
+	buf := make([]byte, rdt.MSS)
+	for {
+		select {
+		case <-ctx.Done():
+			io.WriteString(conn, "ABOR\r\n")
+			reply, _ := tcpctrl.ReadLine(conn)
+			fmt.Println("\r\n" + reply)
+			goto appeDone
+		default:
+		}
+		n, err := localFile.Read(buf)
+		if n > 0 {
+			if sendErr := sender.Send(buf[:n]); sendErr != nil {
+				if ctx.Err() != nil {
+					goto appeDone
 				}
-				progress.Update(n)
-			}
-			if err == io.EOF {
+				fmt.Printf("Send error: %v\n", sendErr)
 				break
 			}
-			if err != nil {
-				fmt.Printf("Read error: %v\n", err)
-				return
-			}
+			progress.Update(n)
 		}
-		time.Sleep(200 * time.Millisecond)
-		sender.Close()
-		progress.Done()
-	}()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Printf("Read error: %v\n", err)
+			break
+		}
+	}
+appeDone:
+	sender.Close()
+	progress.Done()
+	localFile.Close()
+	cleanup()
+	if ctx.Err() == nil {
+		reply, _ := tcpctrl.ReadLine(conn)
+		fmt.Println("\r" + reply)
+	}
 }
