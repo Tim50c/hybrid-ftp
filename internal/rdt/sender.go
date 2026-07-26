@@ -37,7 +37,8 @@ type Sender struct {
 	state      senderState
 	sendBase   uint32
 	nextSeqNum uint32
-	recvWindow uint16
+	recvWindow uint32
+	peerScale  uint8
 	inflight   map[uint32]*packetRecord
 	timers     *TimerManager
 	bbr        *BBR
@@ -98,12 +99,13 @@ func (s *Sender) Connect(addr *net.UDPAddr) error {
 		if !VerifyChecksum(buf[:n]) {
 			continue
 		}
-		if hdr.SessionID != s.sessionID || hdr.Flags != (FlagSYN|FlagACK) {
+		if hdr.SessionID != s.sessionID || hdr.Flags&0x1F != (FlagSYN|FlagACK) {
 			continue
 		}
 
 		s.mu.Lock()
-		s.recvWindow = hdr.Window
+		s.peerScale = WindowScale(hdr.Flags)
+		s.recvWindow = hdr.EffectiveWindow()
 		s.sendBase = myISN + 1
 		s.nextSeqNum = myISN + 1
 		if err := s.sendControl(0, hdr.SeqNum+1, FlagACK); err != nil {
@@ -135,13 +137,14 @@ func (s *Sender) Accept() error {
 		if !VerifyChecksum(buf[:n]) {
 			continue
 		}
-		if hdr.SessionID != s.sessionID || hdr.Flags != FlagSYN {
+		if hdr.SessionID != s.sessionID || hdr.Flags&0x1F != FlagSYN {
 			continue
 		}
 
 		s.mu.Lock()
 		s.remoteAddr = addr
-		s.recvWindow = hdr.Window
+		s.peerScale = WindowScale(hdr.Flags)
+		s.recvWindow = hdr.EffectiveWindow()
 		myISN := uint32(rand.Int31())
 		s.sendBase = myISN + 1
 		s.nextSeqNum = myISN + 1
@@ -161,7 +164,7 @@ func (s *Sender) Accept() error {
 			if !VerifyChecksum(buf[:n]) {
 				continue
 			}
-			if hdr.SessionID != s.sessionID || hdr.Flags != FlagACK {
+			if hdr.SessionID != s.sessionID || hdr.Flags&0x1F != FlagACK {
 				continue
 			}
 			break
@@ -200,8 +203,6 @@ func (s *Sender) Close() error {
 	s.state = sendFinSent
 	s.mu.Unlock()
 
-	// Wait until outbox is empty and inflight stays empty for
-	// at least 200ms (grace period for sendLoop to resume).
 	emptyCount := 0
 	for emptyCount < 3 {
 		select {
@@ -245,7 +246,7 @@ func (s *Sender) sendControl(seqNum, ackNum uint32, flags uint8) error {
 		AckNum:     ackNum,
 		Flags:      flags,
 		PayloadLen: 0,
-		Window:     65535,
+		RawWindow:  65535,
 	}
 	encoded, err := h.Encode(nil)
 	if err != nil {
@@ -313,7 +314,7 @@ func (s *Sender) sendLoop() {
 				AckNum:     0,
 				Flags:      FlagDATA,
 				PayloadLen: uint16(chunkLen),
-				Window:     65535,
+				RawWindow:  65535,
 			}
 			encoded, _ := h.Encode(chunk)
 			checksum := ComputeChecksum(encoded)
@@ -406,7 +407,7 @@ func (s *Sender) recvLoop() {
 			return
 
 		case hdr.Flags&FlagACK != 0:
-			s.recvWindow = hdr.Window
+			s.recvWindow = hdr.EffectiveWindow()
 			s.processAck(hdr.AckNum)
 			s.mu.Unlock()
 
@@ -421,8 +422,10 @@ func (s *Sender) processAck(ackNum uint32) {
 		return
 	}
 
-	for seq := s.sendBase; seq < ackNum; {
-		if rec, ok := s.inflight[seq]; ok {
+	seq := s.sendBase
+	for seq < ackNum {
+		rec, ok := s.inflight[seq]
+		if ok {
 			rec.done = true
 			s.timers.Cancel(seq)
 			rtt := time.Since(rec.sentAt)
@@ -430,7 +433,13 @@ func (s *Sender) processAck(ackNum uint32) {
 			delete(s.inflight, seq)
 			seq += rec.length
 		} else {
-			seq++
+			nextSeq := ackNum
+			for sKey := range s.inflight {
+				if sKey > seq && sKey < nextSeq {
+					nextSeq = sKey
+				}
+			}
+			seq = nextSeq
 		}
 	}
 

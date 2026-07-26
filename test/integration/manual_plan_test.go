@@ -41,7 +41,7 @@ func TestGreeting_OneBanner(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -75,7 +75,7 @@ func TestAuth_HappyPath(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -98,7 +98,7 @@ func TestAuth_WrongPassword(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -114,7 +114,7 @@ func TestAuth_UnknownUser(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -136,7 +136,7 @@ func TestAuth_UserReissue(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -165,7 +165,7 @@ func TestAuth_PASSWithoutUSER(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -180,7 +180,7 @@ func TestAuth_DoublePASS(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -200,7 +200,7 @@ func TestAuth_CaseInsensitivePassword(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -222,7 +222,7 @@ func TestPath_CWD_DotDot_FromRoot(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -244,7 +244,7 @@ func TestPath_RETR_AbsolutePath(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -264,7 +264,7 @@ func TestPath_STOR_AbsolutePath(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -292,7 +292,7 @@ func TestPath_MKD_DotDot(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -315,7 +315,7 @@ func TestPath_CWD_Slash(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -344,7 +344,7 @@ func TestNav_PWD_Root(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -371,7 +371,7 @@ func TestNav_CWD_Subdir(t *testing.T) {
 
 	os.MkdirAll(filepath.Join(rootDir, "subdir"), 0755)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -399,7 +399,7 @@ func TestNav_CDUP_FromRoot(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -421,7 +421,7 @@ func TestNav_CDUP_FromSubdir(t *testing.T) {
 
 	os.MkdirAll(filepath.Join(rootDir, "cdupdir"), 0755)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -451,7 +451,7 @@ func TestNav_CWD_Missing(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -473,7 +473,7 @@ func TestNav_CWD_File(t *testing.T) {
 
 	os.WriteFile(filepath.Join(rootDir, "file.txt"), []byte("hello"), 0644)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -497,7 +497,7 @@ func TestMKD_HappyPath(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -517,7 +517,7 @@ func TestMKD_NoArg(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -537,7 +537,7 @@ func TestMKD_Duplicate(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -560,7 +560,7 @@ func TestRMD_EmptyDir(t *testing.T) {
 
 	os.MkdirAll(filepath.Join(rootDir, "rmdtmp"), 0755)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -580,7 +580,7 @@ func TestRMD_NoArg(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -608,7 +608,7 @@ func TestLIST_Root(t *testing.T) {
 	os.WriteFile(filepath.Join(rootDir, "b.txt"), []byte("b"), 0644)
 	os.MkdirAll(filepath.Join(rootDir, "somedir"), 0755)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -650,7 +650,7 @@ func TestLIST_Missing(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -671,7 +671,7 @@ func TestLIST_WithoutMode(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -696,7 +696,7 @@ func TestNLST(t *testing.T) {
 	os.WriteFile(filepath.Join(rootDir, "alpha.txt"), []byte("a"), 0644)
 	os.WriteFile(filepath.Join(rootDir, "beta.txt"), []byte("b"), 0644)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -732,7 +732,7 @@ func TestSTAT_NoArg(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -754,7 +754,7 @@ func TestSTAT_File(t *testing.T) {
 
 	os.WriteFile(filepath.Join(rootDir, "statfile.txt"), []byte("stat"), 0644)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -776,7 +776,7 @@ func TestSTAT_Dir(t *testing.T) {
 
 	os.MkdirAll(filepath.Join(rootDir, "statdir"), 0755)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -796,7 +796,7 @@ func TestSTAT_Missing(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -822,7 +822,7 @@ func TestSIZE_File(t *testing.T) {
 
 	os.WriteFile(filepath.Join(rootDir, "sized.txt"), []byte("12345"), 0644)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -847,7 +847,7 @@ func TestSIZE_Dir(t *testing.T) {
 
 	os.MkdirAll(filepath.Join(rootDir, "sizedir"), 0755)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -867,7 +867,7 @@ func TestSIZE_NoArg(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -889,7 +889,7 @@ func TestMDTM_File(t *testing.T) {
 
 	os.WriteFile(filepath.Join(rootDir, "mdtm.txt"), []byte("data"), 0644)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -909,7 +909,7 @@ func TestMDTM_NoArg(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -933,7 +933,7 @@ func TestTYPE_A(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -953,7 +953,7 @@ func TestTYPE_I(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -973,7 +973,7 @@ func TestTYPE_Invalid(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -993,7 +993,7 @@ func TestTYPE_NoArg(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1013,7 +1013,7 @@ func TestMODE_S(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1033,7 +1033,7 @@ func TestMODE_B(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1053,7 +1053,7 @@ func TestMODE_C(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1073,7 +1073,7 @@ func TestMODE_Invalid(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1093,7 +1093,7 @@ func TestMODE_NoArg(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1117,7 +1117,7 @@ func TestPASV_ReplyFormat(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1145,7 +1145,7 @@ func TestPORT_InvalidFormat(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1165,7 +1165,7 @@ func TestPORT_OutOfRange(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1185,7 +1185,7 @@ func TestPORT_HappyPath(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1216,7 +1216,7 @@ func TestDataCmd_WithoutMode(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1245,7 +1245,7 @@ func TestRETR_SmallFile(t *testing.T) {
 	sampleContent := []byte("hello world from RETR\n")
 	os.WriteFile(filepath.Join(rootDir, "hello.txt"), sampleContent, 0644)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1284,7 +1284,7 @@ func TestRETR_MissingFile(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1304,7 +1304,7 @@ func TestRETR_NoDataMode(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1332,7 +1332,7 @@ func TestSTOR_SmallFile(t *testing.T) {
 
 	payload := []byte("upload test content\n")
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1380,7 +1380,7 @@ func TestSTOR_NoDataMode(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1406,7 +1406,7 @@ func TestSTOU_UniqueName(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1449,7 +1449,7 @@ func TestSTOU_NoDataMode(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1476,7 +1476,7 @@ func TestAPPE_Append(t *testing.T) {
 
 	os.WriteFile(filepath.Join(rootDir, "append.txt"), []byte("hello"), 0644)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1524,7 +1524,7 @@ func TestAPPE_NoDataMode(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1551,7 +1551,7 @@ func TestDELE_File(t *testing.T) {
 
 	os.WriteFile(filepath.Join(rootDir, "todelete.txt"), []byte("bye"), 0644)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1576,7 +1576,7 @@ func TestDELE_Missing(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1598,7 +1598,7 @@ func TestDELE_Dir(t *testing.T) {
 
 	os.MkdirAll(filepath.Join(rootDir, "deldir"), 0755)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1620,7 +1620,7 @@ func TestDELE_NoArg(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1647,7 +1647,7 @@ func TestRename_File(t *testing.T) {
 	os.WriteFile(filepath.Join(rootDir, "original.txt"), []byte("data"), 0644)
 	os.Remove(filepath.Join(rootDir, "renamed.txt")) // cleanup from prior runs
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1680,7 +1680,7 @@ func TestRename_FileToExisting(t *testing.T) {
 	os.WriteFile(filepath.Join(rootDir, "source.txt"), []byte("source data"), 0644)
 	os.WriteFile(filepath.Join(rootDir, "target.txt"), []byte("target data"), 0644)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1714,7 +1714,7 @@ func TestRNTO_WithoutRNFR(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1736,7 +1736,7 @@ func TestRNTO_NoArg(t *testing.T) {
 
 	os.WriteFile(filepath.Join(rootDir, "rna"), []byte("x"), 0644)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1757,7 +1757,7 @@ func TestRNFR_NonExistent(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1786,7 +1786,7 @@ func TestHASH_File(t *testing.T) {
 
 	expectedHash := fmt.Sprintf("%x", sha256.Sum256(content))
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1812,7 +1812,7 @@ func TestHASH_NoArg(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1834,7 +1834,7 @@ func TestHASH_Dir(t *testing.T) {
 
 	os.MkdirAll(filepath.Join(rootDir, "hashdir"), 0755)
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1858,7 +1858,7 @@ func TestNOOP(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1878,7 +1878,7 @@ func TestABOR_NoTransfer(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1898,7 +1898,7 @@ func TestHELP_NoArg(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1918,7 +1918,7 @@ func TestHELP_WithArg(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 

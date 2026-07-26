@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
-	"sync"
 	"testing"
 	"time"
 )
@@ -19,7 +18,7 @@ func makeRDTDataPacket(t *testing.T, sessionID, seqNum uint32, payload []byte) [
 		SeqNum:     seqNum,
 		Flags:      FlagDATA,
 		PayloadLen: uint16(len(payload)),
-		Window:     65535,
+		RawWindow:  65535,
 	}
 	encoded, err := h.Encode(payload)
 	if err != nil {
@@ -30,48 +29,9 @@ func makeRDTDataPacket(t *testing.T, sessionID, seqNum uint32, payload []byte) [
 	return encoded
 }
 
-// runReceiver starts a receiver on the given UDP conn and writes all
-// delivered chunks to the returned channel. It returns the receiver and
-// a stop function that closes the receiver and waits for the goroutine.
-func runReceiver(t *testing.T, conn *net.UDPConn, sessionID uint32, isServer bool) (*Receiver, func()) {
-	t.Helper()
-	r := NewReceiver(conn, sessionID)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	readyCh := make(chan struct{})
-
-	// We use a goroutine to drive Accept/Connect and signal when ready.
-	// But for this test we don't need the 3-way handshake; we can drive
-	// the receiver manually by calling its internal methods. However, the
-	// receiveLoop is started by Accept/Connect. So we need at least one
-	// of those.
-	//
-	// Since this is a test for the receiveLoop's flush-on-exit behavior,
-	// we don't need the full handshake. We can:
-	//   1. Set state to recvEstablished directly
-	//   2. Start the receiveLoop manually
-	//
-	// The receiveLoop is unexported, so we have to go through Accept/Connect.
-	// For simplicity, use Connect on the client side and accept on the server.
-	_ = isServer
-
-	// We can't easily call receiveLoop directly. Instead, we'll use Connect()
-	// and drive the handshake ourselves by sending the expected packets from
-	// the other side.
-	//
-	// Actually for this test, the simplest path is:
-	// - Use the receiver's Accept() or Connect() which starts the receiveLoop
-	// - Send the handshake packets from a peer
-	// - Then send the data packets out of order
-	// - Then send FIN
-	// - Verify the output channel has all the data
-
-	_ = r
-	_ = wg
-	_ = readyCh
-
-	return r, func() {}
-}
+// runReceiver removed — dead code that copied a sync.WaitGroup lock value,
+// causing a go vet warning (copylocks). The real integration test,
+// TestReceiver_FlushesBufferedOnExit, inlines the full handshake instead.
 
 // TestReceiver_FlushesBufferedOnExit is the targeted regression test for the
 // bug where the receiveLoop returns on FIN without flushing r.recvBuffer.
@@ -130,7 +90,7 @@ func TestReceiver_FlushesBufferedOnExit(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	myISN := uint32(0xDEADBEEF)
-	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, Window: 65535}
+	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, RawWindow: 65535}
 	synBytes, _ := syn.Encode(nil)
 	cs := ComputeChecksum(synBytes)
 	binary.BigEndian.PutUint32(synBytes[17:21], cs)
@@ -157,7 +117,7 @@ func TestReceiver_FlushesBufferedOnExit(t *testing.T) {
 	serverISN := synAckHdr.SeqNum
 
 	// Send ACK to complete the 3-way handshake.
-	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, Window: 65535}
+	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, RawWindow: 65535}
 	ackBytes, _ := ack.Encode(nil)
 	cs = ComputeChecksum(ackBytes)
 	binary.BigEndian.PutUint32(ackBytes[17:21], cs)
@@ -211,7 +171,7 @@ func TestReceiver_FlushesBufferedOnExit(t *testing.T) {
 	}
 
 	// Send FIN.
-	fin := &Header{SessionID: sessionID, Flags: FlagFIN, Window: 65535}
+	fin := &Header{SessionID: sessionID, Flags: FlagFIN, RawWindow: 65535}
 	finBytes, _ := fin.Encode(nil)
 	cs = ComputeChecksum(finBytes)
 	binary.BigEndian.PutUint32(finBytes[17:21], cs)
@@ -297,13 +257,13 @@ func TestReceiver_InOrderDelivery(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	myISN := uint32(0x1000)
-	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, Window: 65535}
+	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), syn, nil)
 
 	synAckHdr := readAndCheckFlags(t, peerConn, FlagSYN|FlagACK)
 	serverISN := synAckHdr.SeqNum
 
-	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, Window: 65535}
+	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), ack, nil)
 
 	if err := <-acceptDone; err != nil {
@@ -320,7 +280,7 @@ func TestReceiver_InOrderDelivery(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	fin := &Header{SessionID: sessionID, Flags: FlagFIN, Window: 65535}
+	fin := &Header{SessionID: sessionID, Flags: FlagFIN, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), fin, nil)
 
 	var got []byte
@@ -368,13 +328,13 @@ func TestReceiver_DuplicateDetection(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	myISN := uint32(0x2000)
-	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, Window: 65535}
+	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), syn, nil)
 
 	synAckHdr := readAndCheckFlags(t, peerConn, FlagSYN|FlagACK)
 	serverISN := synAckHdr.SeqNum
 
-	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, Window: 65535}
+	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), ack, nil)
 
 	if err := <-acceptDone; err != nil {
@@ -388,7 +348,7 @@ func TestReceiver_DuplicateDetection(t *testing.T) {
 	peerConn.WriteToUDP(pkt, receiverConn.LocalAddr().(*net.UDPAddr))
 	time.Sleep(20 * time.Millisecond)
 
-	fin := &Header{SessionID: sessionID, Flags: FlagFIN, Window: 65535}
+	fin := &Header{SessionID: sessionID, Flags: FlagFIN, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), fin, nil)
 
 	var got []byte
@@ -435,13 +395,13 @@ func TestReceiver_ChecksumDiscard(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	myISN := uint32(0x3000)
-	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, Window: 65535}
+	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), syn, nil)
 
 	synAckHdr := readAndCheckFlags(t, peerConn, FlagSYN|FlagACK)
 	serverISN := synAckHdr.SeqNum
 
-	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, Window: 65535}
+	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), ack, nil)
 
 	if err := <-acceptDone; err != nil {
@@ -464,7 +424,7 @@ func TestReceiver_ChecksumDiscard(t *testing.T) {
 	peerConn.WriteToUDP(actualPkt, receiverConn.LocalAddr().(*net.UDPAddr))
 	time.Sleep(20 * time.Millisecond)
 
-	fin := &Header{SessionID: sessionID, Flags: FlagFIN, Window: 65535}
+	fin := &Header{SessionID: sessionID, Flags: FlagFIN, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), fin, nil)
 
 	var got []byte
@@ -511,19 +471,19 @@ func TestReceiver_SessionIDFiltering(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	wrongSyn := &Header{SessionID: 9999, SeqNum: 0, Flags: FlagSYN, Window: 65535}
+	wrongSyn := &Header{SessionID: 9999, SeqNum: 0, Flags: FlagSYN, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), wrongSyn, nil)
 
 	time.Sleep(300 * time.Millisecond)
 
 	myISN := uint32(0x4000)
-	correctSyn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, Window: 65535}
+	correctSyn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), correctSyn, nil)
 
 	synAckHdr := readAndCheckFlags(t, peerConn, FlagSYN|FlagACK)
 	serverISN := synAckHdr.SeqNum
 
-	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, Window: 65535}
+	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), ack, nil)
 
 	select {
@@ -560,13 +520,13 @@ func TestReceiver_RSTHandling(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	myISN := uint32(0x5000)
-	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, Window: 65535}
+	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), syn, nil)
 
 	synAckHdr := readAndCheckFlags(t, peerConn, FlagSYN|FlagACK)
 	serverISN := synAckHdr.SeqNum
 
-	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, Window: 65535}
+	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), ack, nil)
 
 	if err := <-acceptDone; err != nil {
@@ -578,7 +538,7 @@ func TestReceiver_RSTHandling(t *testing.T) {
 	peerConn.WriteToUDP(dataPkt, receiverConn.LocalAddr().(*net.UDPAddr))
 	time.Sleep(50 * time.Millisecond)
 
-	rst := &Header{SessionID: sessionID, Flags: FlagRST, Window: 65535}
+	rst := &Header{SessionID: sessionID, Flags: FlagRST, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), rst, nil)
 
 	deadline := time.After(2 * time.Second)
@@ -619,7 +579,7 @@ func TestReceiver_WindowAdvertisement(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	myISN := uint32(0x6000)
-	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, Window: 65535}
+	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), syn, nil)
 
 	peerConn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -631,7 +591,7 @@ func TestReceiver_WindowAdvertisement(t *testing.T) {
 	synAckHdr, _, _ := Decode(buf[:n])
 	serverISN := synAckHdr.SeqNum
 
-	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, Window: 65535}
+	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), ack, nil)
 
 	if err := <-acceptDone; err != nil {
@@ -651,14 +611,14 @@ func TestReceiver_WindowAdvertisement(t *testing.T) {
 	}
 	ackHdr, _, _ := Decode(buf2[:n2])
 
-	if ackHdr.Window == 0 {
+	if ackHdr.RawWindow == 0 {
 		t.Error("window should not be 0 with empty buffer")
 	}
-	if ackHdr.Window > 65535 {
-		t.Errorf("window %d exceeds max", ackHdr.Window)
+	if ackHdr.RawWindow > 65535 {
+		t.Errorf("window %d exceeds max", ackHdr.RawWindow)
 	}
 
-	fin := &Header{SessionID: sessionID, Flags: FlagFIN, Window: 65535}
+	fin := &Header{SessionID: sessionID, Flags: FlagFIN, RawWindow: 65535}
 	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), fin, nil)
 
 	drainChannel(t, receiver.Receive())
@@ -727,8 +687,8 @@ func readPacket(t *testing.T, conn *net.UDPConn) *Header {
 func readAndCheckFlags(t *testing.T, conn *net.UDPConn, expectedFlags uint8) *Header {
 	t.Helper()
 	hdr := readPacket(t, conn)
-	if hdr.Flags != expectedFlags {
-		t.Errorf("expected flags=0x%02x, got 0x%02x", expectedFlags, hdr.Flags)
+	if hdr.Flags&0x1F != expectedFlags {
+		t.Errorf("expected flags=0x%02x, got 0x%02x (control: 0x%02x)", expectedFlags, hdr.Flags, hdr.Flags&0x1F)
 	}
 	return hdr
 }

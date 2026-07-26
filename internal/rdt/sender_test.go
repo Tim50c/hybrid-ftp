@@ -50,7 +50,7 @@ func completeSenderHandshake(t *testing.T, sender *Sender, peerConn *net.UDPConn
 		SeqNum:    myISN,
 		AckNum:    synHdr.SeqNum + 1,
 		Flags:     FlagSYN | FlagACK,
-		Window:    65535,
+		RawWindow: 65535,
 	}
 	synAckBytes, _ := synAck.Encode(nil)
 	cs := ComputeChecksum(synAckBytes)
@@ -116,7 +116,7 @@ func TestSender_AcceptThreeWayHandshake(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	syn := &Header{SessionID: 43, SeqNum: 0xAAAA, Flags: FlagSYN, Window: 65535}
+	syn := &Header{SessionID: 43, SeqNum: 0xAAAA, Flags: FlagSYN, RawWindow: 65535}
 	synBytes, _ := syn.Encode(nil)
 	cs := ComputeChecksum(synBytes)
 	binary.BigEndian.PutUint32(synBytes[17:21], cs)
@@ -133,7 +133,7 @@ func TestSender_AcceptThreeWayHandshake(t *testing.T) {
 		t.Fatalf("expected SYN+ACK, got flags=0x%02x", synAckHdr.Flags)
 	}
 
-	ack := &Header{SessionID: 43, AckNum: synAckHdr.SeqNum + 1, Flags: FlagACK, Window: 65535}
+	ack := &Header{SessionID: 43, AckNum: synAckHdr.SeqNum + 1, Flags: FlagACK, RawWindow: 65535}
 	ackBytes, _ := ack.Encode(nil)
 	cs = ComputeChecksum(ackBytes)
 	binary.BigEndian.PutUint32(ackBytes[17:21], cs)
@@ -198,7 +198,7 @@ func TestSender_SendAndProcessAck(t *testing.T) {
 		SessionID: 44,
 		AckNum:    dataHdr.SeqNum + uint32(len(payload)),
 		Flags:     FlagACK,
-		Window:    65535,
+		RawWindow: 65535,
 	}
 	ackBytes, _ := ack.Encode(nil)
 	cs := ComputeChecksum(ackBytes)
@@ -315,7 +315,7 @@ func TestSender_CumulativeAck(t *testing.T) {
 		SessionID: 46,
 		AckNum:    cumulativeAck,
 		Flags:     FlagACK,
-		Window:    65535,
+		RawWindow: 65535,
 	}
 	ackBytes, _ := ack.Encode(nil)
 	cs := ComputeChecksum(ackBytes)
@@ -457,7 +457,7 @@ func TestSender_RSTHandling(t *testing.T) {
 	sender := NewSender(senderConn, 50)
 	completeSenderHandshake(t, sender, peerConn, senderConn)
 
-	rst := &Header{SessionID: 50, Flags: FlagRST, Window: 65535}
+	rst := &Header{SessionID: 50, Flags: FlagRST, RawWindow: 65535}
 	rstBytes, _ := rst.Encode(nil)
 	cs := ComputeChecksum(rstBytes)
 	binary.BigEndian.PutUint32(rstBytes[17:21], cs)
@@ -490,7 +490,7 @@ func TestSender_FinPlusAckHandling(t *testing.T) {
 	sender := NewSender(senderConn, 51)
 	completeSenderHandshake(t, sender, peerConn, senderConn)
 
-	finAck := &Header{SessionID: 51, Flags: FlagFIN | FlagACK, Window: 65535}
+	finAck := &Header{SessionID: 51, Flags: FlagFIN | FlagACK, RawWindow: 65535}
 	finAckBytes, _ := finAck.Encode(nil)
 	cs := ComputeChecksum(finAckBytes)
 	binary.BigEndian.PutUint32(finAckBytes[17:21], cs)
@@ -695,7 +695,7 @@ func TestSender_CloseWaitDrain(t *testing.T) {
 		SessionID: 55,
 		AckNum:    firstSeq + uint32(len(payload)),
 		Flags:     FlagACK,
-		Window:    65535,
+		RawWindow: 65535,
 	}
 	ackBytes, _ := ack.Encode(nil)
 	cs := ComputeChecksum(ackBytes)
@@ -725,5 +725,125 @@ func TestSender_CloseWaitDrain(t *testing.T) {
 	case <-closeDone:
 	case <-time.After(15 * time.Second):
 		t.Fatal("Close timed out")
+	}
+}
+
+func TestProcessAckSkipsGaps(t *testing.T) {
+	s := &Sender{
+		inflight:   make(map[uint32]*packetRecord),
+		sendBase:   0,
+		recvWindow: 65535,
+		bbr:        NewBBR(),
+	}
+	s.timers = NewTimerManager(time.Second, func(seq uint32) {})
+
+	for i := uint32(0); i < 7000; i += 1400 {
+		s.inflight[i] = &packetRecord{
+			seq:    i,
+			length: 1400,
+			sentAt: time.Now(),
+		}
+	}
+
+	s.processAck(7000)
+
+	if s.sendBase != 7000 {
+		t.Errorf("sendBase = %d, want 7000", s.sendBase)
+	}
+	if len(s.inflight) != 0 {
+		t.Errorf("inflight not empty after ack: %d entries remain", len(s.inflight))
+	}
+}
+
+func TestSenderCloseDrainsOutbox(t *testing.T) {
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:60000")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Sender{
+		conn:       conn,
+		remoteAddr: addr,
+		outbox:     make(chan []byte, 10),
+		inflight:   make(map[uint32]*packetRecord),
+		done:       make(chan struct{}),
+		errCh:      make(chan error, 1),
+		state:      sendEstablished,
+		bbr:        NewBBR(),
+		recvWindow: 65535,
+	}
+	s.timers = NewTimerManager(time.Second, func(seq uint32) {})
+
+	for i := 0; i < 3; i++ {
+		s.outbox <- []byte("data-chunk")
+	}
+
+	s.mu.Lock()
+	s.inflight[1000] = &packetRecord{
+		seq:    1000,
+		length: 1400,
+		sentAt: time.Now(),
+	}
+	s.mu.Unlock()
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		for i := 0; i < 3; i++ {
+			select {
+			case <-s.outbox:
+			default:
+			}
+		}
+	}()
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		s.mu.Lock()
+		delete(s.inflight, 1000)
+		s.mu.Unlock()
+		close(s.done)
+	}()
+
+	start := time.Now()
+	err = s.Close()
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Errorf("Close returned error: %v", err)
+	}
+	if elapsed < 100*time.Millisecond {
+		t.Errorf("Close returned too quickly: %v, want >= 100ms (drain not exercised)", elapsed)
+	}
+}
+
+func TestProcessAckPartialAck(t *testing.T) {
+	s := &Sender{
+		inflight:   make(map[uint32]*packetRecord),
+		sendBase:   0,
+		recvWindow: 65535,
+		bbr:        NewBBR(),
+	}
+	s.timers = NewTimerManager(time.Second, func(seq uint32) {})
+
+	for i := uint32(0); i < 7000; i += 1400 {
+		s.inflight[i] = &packetRecord{
+			seq:    i,
+			length: 1400,
+			sentAt: time.Now(),
+		}
+	}
+
+	s.processAck(2800)
+
+	if s.sendBase != 2800 {
+		t.Errorf("sendBase = %d, want 2800", s.sendBase)
+	}
+	if len(s.inflight) != 3 {
+		t.Errorf("inflight has %d entries after partial ack, want 3", len(s.inflight))
 	}
 }

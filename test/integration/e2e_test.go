@@ -77,7 +77,23 @@ func startServer(t *testing.T) (*exec.Cmd, func()) {
 		t.Fatalf("start server: %v", err)
 	}
 
-	time.Sleep(500 * time.Millisecond)
+	addr := net.JoinHostPort("127.0.0.1", ctrlPort)
+	deadline := time.Now().Add(5 * time.Second)
+	var dialErr error
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			dialErr = nil
+			break
+		}
+		dialErr = err
+		time.Sleep(200 * time.Millisecond)
+	}
+	if dialErr != nil {
+		cmd.Process.Kill()
+		t.Fatalf("server failed to start on %s: %v", addr, dialErr)
+	}
 
 	return cmd, func() {
 		cmd.Process.Signal(os.Interrupt)
@@ -90,6 +106,15 @@ func startServer(t *testing.T) (*exec.Cmd, func()) {
 			<-done
 		}
 	}
+}
+
+func mustDial(t *testing.T, addr string) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial %s: %v", addr, err)
+	}
+	return conn
 }
 
 type ftpConn struct {
@@ -166,7 +191,7 @@ func TestE2E_AuthFail(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -182,7 +207,7 @@ func TestE2E_UploadDownload(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -235,7 +260,7 @@ func TestE2E_ManualInteractiveFlow(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -312,7 +337,7 @@ func TestE2E_List(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -351,7 +376,7 @@ func TestE2E_PATH_Containment(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -372,7 +397,7 @@ func TestE2E_CWD(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -407,7 +432,7 @@ func TestE2E_MKD_RMD(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -442,7 +467,7 @@ func TestE2E_DELE(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -467,7 +492,7 @@ func TestE2E_CDUP(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -489,7 +514,7 @@ func TestE2E_NLST(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -519,7 +544,7 @@ func TestE2E_SIZE_MDTM(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -544,7 +569,7 @@ func TestE2E_RNFR_RNTO(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -572,7 +597,7 @@ func TestE2E_STOU(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -614,7 +639,7 @@ func TestE2E_APPE(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -657,7 +682,7 @@ func TestE2E_HASH(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -686,7 +711,7 @@ func TestE2E_MODE(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -708,7 +733,7 @@ func TestE2E_NOOP_HELP(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -730,7 +755,7 @@ func TestE2E_PORT_Transfer(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -846,7 +871,7 @@ func TestE2E_STAT(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -875,7 +900,7 @@ func TestE2E_ABOR(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1064,7 +1089,7 @@ func TestE2E_BinaryFileTransfer(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1108,7 +1133,7 @@ func TestE2E_STOR_Binary(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1179,7 +1204,7 @@ func TestE2E_LargeFileTransfer_NoLoss(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1305,7 +1330,7 @@ func TestE2E_PASV_MultiTransfer(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1360,7 +1385,7 @@ func TestE2E_PASV_UploadThenDownload(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1414,7 +1439,7 @@ func TestE2E_LargeFileTransfer_WithHASH(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1475,7 +1500,7 @@ func TestE2E_ZeroByteFile(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1523,7 +1548,7 @@ func TestE2E_ABOR_MidTransfer(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1564,7 +1589,7 @@ func TestE2E_MultipleSequentialTransfers(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1610,7 +1635,7 @@ func TestE2E_RoundTripHashCheck(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1683,7 +1708,7 @@ func TestE2E_SIZE_AfterTransfer(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1792,7 +1817,7 @@ func TestE2E_PORT_RoundTrip_HASH(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 

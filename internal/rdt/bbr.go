@@ -250,12 +250,12 @@ func (b *BBR) OnLoss(lostBytes uint32) {
 	}
 }
 
-func (b *BBR) CanSend(dataLen uint32, recvWindow uint16) bool {
+func (b *BBR) CanSend(dataLen uint32, recvWindow uint32) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	effCwnd := b.cwnd
-	if uint32(recvWindow) < effCwnd {
-		effCwnd = uint32(recvWindow)
+	if recvWindow < effCwnd {
+		effCwnd = recvWindow
 	}
 	return uint64(b.inflightBytes)+uint64(dataLen) <= uint64(effCwnd)
 }

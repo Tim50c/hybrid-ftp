@@ -11,7 +11,7 @@ func TestComputeAndVerify_Success(t *testing.T) {
 		SeqNum:    100,
 		AckNum:    200,
 		Flags:     FlagDATA,
-		Window:    65535,
+		RawWindow:    65535,
 	}
 	payload := []byte("test payload for checksum verification")
 	encoded, _ := h.Encode(payload)
@@ -76,7 +76,7 @@ func TestVerifyChecksum_EmptyPacket(t *testing.T) {
 		SeqNum:     0,
 		Flags:      FlagACK,
 		PayloadLen: 0,
-		Window:     65535,
+		RawWindow:     65535,
 	}
 	encoded, _ := h.Encode(nil)
 	checksum := ComputeChecksum(encoded)

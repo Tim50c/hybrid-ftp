@@ -25,14 +25,31 @@ const (
 	FlagDATA       = 0x10
 )
 
+func WindowScale(flags uint8) uint8 {
+	return (flags >> 5) & 0x07
+}
+
+func SetWindowScale(flags uint8, scale uint8) uint8 {
+	return (flags & 0x1F) | ((scale & 0x07) << 5)
+}
+
 type Header struct {
 	SessionID  uint32
 	SeqNum     uint32
 	AckNum     uint32
 	Flags      uint8
 	PayloadLen uint16
-	Window     uint16
+	RawWindow  uint16
 	Checksum   uint32
+}
+
+func (h *Header) EffectiveWindow() uint32 {
+	return uint32(h.RawWindow) << WindowScale(h.Flags)
+}
+
+func (h *Header) SetWindow(win uint32, scale uint8) {
+	h.RawWindow = uint16(win >> scale)
+	h.Flags = SetWindowScale(h.Flags, scale)
 }
 
 func (h *Header) Encode(payload []byte) ([]byte, error) {
@@ -44,7 +61,7 @@ func (h *Header) Encode(payload []byte) ([]byte, error) {
 	binary.BigEndian.PutUint32(buf[8:12], h.AckNum)
 	buf[12] = h.Flags
 	binary.BigEndian.PutUint16(buf[13:15], h.PayloadLen)
-	binary.BigEndian.PutUint16(buf[15:17], h.Window)
+	binary.BigEndian.PutUint16(buf[15:17], h.RawWindow)
 	binary.BigEndian.PutUint32(buf[17:21], h.Checksum)
 
 	copy(buf[HeaderSize:], payload)
@@ -61,7 +78,7 @@ func Decode(data []byte) (*Header, []byte, error) {
 		AckNum:     binary.BigEndian.Uint32(data[8:12]),
 		Flags:      data[12],
 		PayloadLen: binary.BigEndian.Uint16(data[13:15]),
-		Window:     binary.BigEndian.Uint16(data[15:17]),
+		RawWindow:  binary.BigEndian.Uint16(data[15:17]),
 		Checksum:   binary.BigEndian.Uint32(data[17:21]),
 	}
 
