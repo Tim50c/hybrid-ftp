@@ -152,6 +152,13 @@ func DeleteFile(root string, sess *session.Session, filename string) error {
 	if err != nil {
 		return fmt.Errorf("delete file: %w", err)
 	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		return fmt.Errorf("delete file: %w", err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("cannot delete a directory: %s", filename)
+	}
 	if err := os.Remove(fullPath); err != nil {
 		return fmt.Errorf("delete file: %w", err)
 	}
@@ -245,6 +252,9 @@ func RenameTo(root string, sess *session.Session, newname string) error {
 	fullPath, err := ResolveSafe(root, sess, newname)
 	if err != nil {
 		return fmt.Errorf("rename to: %w", err)
+	}
+	if _, err := os.Stat(fullPath); err == nil {
+		return fmt.Errorf("destination already exists: %s", newname)
 	}
 	if err := os.Rename(sess.RnfrPath, fullPath); err != nil {
 		return fmt.Errorf("rename to: %w", err)

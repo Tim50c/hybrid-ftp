@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"flag"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +26,10 @@ var (
 
 func main() {
 	flag.Parse()
+
+	sigCh = make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
 
 	addr := net.JoinHostPort(*serverHost, *ctrlPort)
 	conn, err := net.Dial("tcp", addr)
@@ -102,7 +108,7 @@ func main() {
 
 		switch cmd {
 		case tcpctrl.CmdPORT:
-			handlePORT(conn)
+			handlePORT(conn, strings.TrimSpace(line[4:]))
 
 		case tcpctrl.CmdPASV:
 			reply, _ := tcpctrl.ReadLine(conn)
@@ -179,6 +185,7 @@ var (
 	portUDPConn     *net.UDPConn
 	currentPASVHost string
 	currentPASVPort int
+	sigCh           chan os.Signal
 )
 
 func parsePASV(reply string) (string, int, error) {
@@ -210,22 +217,11 @@ func setupPASVConnection(host string, port int) {
 }
 
 func ensurePASV(conn net.Conn) {
-	if connDataMode == modePORT || (connDataMode == modePASV && currentPASVHost != "") {
+	if connDataMode == modePORT || connDataMode == modePASV {
 		return
 	}
 	if connDataMode == modeNone {
 		return
-	}
-	io.WriteString(conn, "PASV\r\n")
-	reply, err := tcpctrl.ReadLine(conn)
-	if err != nil {
-		return
-	}
-	if strings.HasPrefix(reply, "227") {
-		ip, port, parseErr := parsePASV(reply)
-		if parseErr == nil {
-			setupPASVConnection(ip, port)
-		}
 	}
 }
 
@@ -242,8 +238,6 @@ func prepareDataTransfer() (*net.UDPConn, func(), error) {
 		}
 		cleanup := func() {
 			udpConn.Close()
-			currentPASVHost = ""
-			currentPASVPort = 0
 		}
 		return udpConn, cleanup, nil
 	case modePORT:
@@ -260,23 +254,50 @@ func prepareDataTransfer() (*net.UDPConn, func(), error) {
 	}
 }
 
-func handlePORT(conn net.Conn) {
-	ip4 := conn.LocalAddr().(*net.TCPAddr).IP.To4()
-	if ip4 == nil {
-		fmt.Println("PORT: IPv6 not supported")
+func handlePORT(conn net.Conn, args string) {
+	if args == "" {
+		io.WriteString(conn, "PORT\r\n")
+		reply, _ := tcpctrl.ReadLine(conn)
+		fmt.Println(reply)
 		return
 	}
-	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+
+	parts := strings.Split(args, ",")
+	if len(parts) != 6 {
+		io.WriteString(conn, "PORT "+args+"\r\n")
+		reply, _ := tcpctrl.ReadLine(conn)
+		fmt.Println(reply)
+		return
+	}
+	nums := make([]int, 6)
+	for i, p := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(p))
+		if err != nil || n < 0 || n > 255 {
+			io.WriteString(conn, "PORT "+args+"\r\n")
+			reply, _ := tcpctrl.ReadLine(conn)
+			fmt.Println(reply)
+			return
+		}
+		nums[i] = n
+	}
+	port := nums[4]*256 + nums[5]
+	ip := fmt.Sprintf("%d.%d.%d.%d", nums[0], nums[1], nums[2], nums[3])
+
+	if portUDPConn != nil {
+		portUDPConn.Close()
+		portUDPConn = nil
+	}
+
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{
+		IP:   net.ParseIP(ip),
+		Port: port,
+	})
 	if err != nil {
 		fmt.Printf("PORT: %v\n", err)
 		return
 	}
 
-	localPort := udpConn.LocalAddr().(*net.UDPAddr).Port
-	p1, p2 := localPort/256, localPort%256
-	portCmd := fmt.Sprintf("PORT %d,%d,%d,%d,%d,%d",
-		ip4[0], ip4[1], ip4[2], ip4[3], p1, p2)
-
+	portCmd := "PORT " + args
 	io.WriteString(conn, portCmd+"\r\n")
 	reply, _ := tcpctrl.ReadLine(conn)
 	fmt.Println(reply)
@@ -395,15 +416,41 @@ func handleList(conn net.Conn, path string) {
 		}
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-sigCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	go func() { <-ctx.Done(); r.Close() }()
+
 	var listing []byte
-	for chunk := range r.Receive() {
-		listing = append(listing, chunk...)
+	recvCh := r.Receive()
+	for {
+		select {
+		case <-ctx.Done():
+			io.WriteString(conn, "ABOR\r\n")
+			reply, _ := tcpctrl.ReadLine(conn)
+			fmt.Println("\r\n" + reply)
+			goto listDone
+		case chunk, ok := <-recvCh:
+			if !ok {
+				goto listDone
+			}
+			listing = append(listing, chunk...)
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
+listDone:
 	r.Close()
 	fmt.Print(string(listing))
-
-	reply, _ = tcpctrl.ReadLine(conn)
-	fmt.Println(reply)
+	if ctx.Err() == nil {
+		reply, _ := tcpctrl.ReadLine(conn)
+		fmt.Println(reply)
+	}
 }
 
 func handleRETR(conn net.Conn, filename string) {
@@ -456,20 +503,46 @@ func handleRETR(conn net.Conn, filename string) {
 	}
 	defer localFile.Close()
 
-	progress := rdt.NewProgressBar(0)
-	for chunk := range receiver.Receive() {
-		n, err := localFile.Write(chunk)
-		if err != nil {
-			fmt.Printf("Write error: %v\n", err)
-			break
+	ctxRetr, cancelRetr := context.WithCancel(context.Background())
+	defer cancelRetr()
+	go func() {
+		select {
+		case <-sigCh:
+			cancelRetr()
+		case <-ctxRetr.Done():
 		}
-		progress.Update(n)
+	}()
+	go func() { <-ctxRetr.Done(); receiver.Close() }()
+
+	progress := rdt.NewProgressBar(0)
+	recvCh := receiver.Receive()
+	for {
+		select {
+		case <-ctxRetr.Done():
+			io.WriteString(conn, "ABOR\r\n")
+			reply, _ := tcpctrl.ReadLine(conn)
+			fmt.Println("\r\n" + reply)
+			goto retrDone
+		case chunk, ok := <-recvCh:
+			if !ok {
+				goto retrDone
+			}
+			n, err := localFile.Write(chunk)
+			if err != nil {
+				fmt.Printf("Write error: %v\n", err)
+				goto retrDone
+			}
+			progress.Update(n)
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
+retrDone:
 	receiver.Close()
 	progress.Done()
-
-	reply, _ = tcpctrl.ReadLine(conn)
-	fmt.Println(reply)
+	if ctxRetr.Err() == nil {
+		reply, _ = tcpctrl.ReadLine(conn)
+		fmt.Println(reply)
+	}
 }
 
 func handleSTOR(conn net.Conn, filename string) {
@@ -487,11 +560,11 @@ func handleSTOR(conn net.Conn, filename string) {
 		fmt.Printf("Cannot open local file: %v\n", err)
 		return
 	}
-	defer localFile.Close()
 
 	fileInfo, err := localFile.Stat()
 	if err != nil {
 		fmt.Printf("Cannot stat local file: %v\n", err)
+		localFile.Close()
 		return
 	}
 
@@ -499,15 +572,16 @@ func handleSTOR(conn net.Conn, filename string) {
 	reply, _ := tcpctrl.ReadLine(conn)
 	fmt.Println(reply)
 	if !strings.HasPrefix(reply, "150") {
+		localFile.Close()
 		return
 	}
 
 	udpConn, cleanup, err := prepareDataTransfer()
 	if err != nil {
 		fmt.Println(err)
+		localFile.Close()
 		return
 	}
-	defer cleanup()
 
 	sessionID := uint32(1)
 	sender := rdt.NewSender(udpConn, sessionID)
@@ -518,21 +592,47 @@ func handleSTOR(conn net.Conn, filename string) {
 			fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
 		if err := sender.Connect(udpAddr); err != nil {
 			fmt.Printf("RDT connect: %v\n", err)
+			cleanup()
+			localFile.Close()
 			return
 		}
 	case modePORT:
 		if err := sender.Accept(); err != nil {
 			fmt.Printf("RDT accept: %v\n", err)
+			cleanup()
+			localFile.Close()
 			return
 		}
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-sigCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	go func() { <-ctx.Done(); sender.Close() }()
+
 	progress := rdt.NewProgressBar(fileInfo.Size())
 	buf := make([]byte, rdt.MSS)
 	for {
+		select {
+		case <-ctx.Done():
+			io.WriteString(conn, "ABOR\r\n")
+			reply, _ := tcpctrl.ReadLine(conn)
+			fmt.Println("\r\n" + reply)
+			goto storDone
+		default:
+		}
 		n, err := localFile.Read(buf)
 		if n > 0 {
 			if sendErr := sender.Send(buf[:n]); sendErr != nil {
+				if ctx.Err() != nil {
+					goto storDone
+				}
 				fmt.Printf("Send error: %v\n", sendErr)
 				break
 			}
@@ -546,13 +646,15 @@ func handleSTOR(conn net.Conn, filename string) {
 			break
 		}
 	}
-	// Wait for remaining inflight data to drain before closing
-	time.Sleep(200 * time.Millisecond)
+storDone:
 	sender.Close()
 	progress.Done()
-
-	reply, _ = tcpctrl.ReadLine(conn)
-	fmt.Println(reply)
+	localFile.Close()
+	cleanup()
+	if ctx.Err() == nil {
+		reply, _ := tcpctrl.ReadLine(conn)
+		fmt.Println("\r" + reply)
+	}
 }
 
 func handleNLST(conn net.Conn, path string) {
@@ -572,7 +674,6 @@ func handleNLST(conn net.Conn, path string) {
 		fmt.Println(err)
 		return
 	}
-	defer cleanup()
 
 	sessionID := uint32(1)
 	r := rdt.NewReceiver(udpConn, sessionID)
@@ -582,24 +683,53 @@ func handleNLST(conn net.Conn, path string) {
 		udpAddr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
 		if err := r.Connect(udpAddr); err != nil {
 			fmt.Printf("RDT connect error: %v\n", err)
+			cleanup()
 			return
 		}
 	case modePORT:
 		if err := r.Accept(); err != nil {
 			fmt.Printf("RDT accept error: %v\n", err)
+			cleanup()
 			return
 		}
 	}
 
-	var listing []byte
-	for chunk := range r.Receive() {
-		listing = append(listing, chunk...)
-	}
-	r.Close()
-	fmt.Print(string(listing))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-sigCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	go func() { <-ctx.Done(); r.Close() }()
 
-	reply, _ = tcpctrl.ReadLine(conn)
-	fmt.Println(reply)
+	var listing []byte
+	recvCh := r.Receive()
+	for {
+		select {
+		case <-ctx.Done():
+			io.WriteString(conn, "ABOR\r\n")
+			reply, _ := tcpctrl.ReadLine(conn)
+			fmt.Println("\r\n" + reply)
+			goto nlstDone
+		case chunk, ok := <-recvCh:
+			if !ok {
+				goto nlstDone
+			}
+			listing = append(listing, chunk...)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+nlstDone:
+	r.Close()
+	cleanup()
+	fmt.Print(string(listing))
+	if ctx.Err() == nil {
+		reply, _ := tcpctrl.ReadLine(conn)
+		fmt.Println(reply)
+	}
 }
 
 func handleSTOU(conn net.Conn, filename string) {
@@ -613,11 +743,11 @@ func handleSTOU(conn net.Conn, filename string) {
 		fmt.Printf("Cannot open local file: %v\n", err)
 		return
 	}
-	defer localFile.Close()
 
 	fileInfo, err := localFile.Stat()
 	if err != nil {
 		fmt.Printf("Cannot stat local file: %v\n", err)
+		localFile.Close()
 		return
 	}
 
@@ -625,15 +755,16 @@ func handleSTOU(conn net.Conn, filename string) {
 	reply, _ := tcpctrl.ReadLine(conn)
 	fmt.Println(reply)
 	if !strings.HasPrefix(reply, "150") {
+		localFile.Close()
 		return
 	}
 
 	udpConn, cleanup, err := prepareDataTransfer()
 	if err != nil {
 		fmt.Println(err)
+		localFile.Close()
 		return
 	}
-	defer cleanup()
 
 	sessionID := uint32(1)
 	sender := rdt.NewSender(udpConn, sessionID)
@@ -644,21 +775,47 @@ func handleSTOU(conn net.Conn, filename string) {
 			fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
 		if err := sender.Connect(udpAddr); err != nil {
 			fmt.Printf("RDT connect: %v\n", err)
+			cleanup()
+			localFile.Close()
 			return
 		}
 	case modePORT:
 		if err := sender.Accept(); err != nil {
 			fmt.Printf("RDT accept: %v\n", err)
+			cleanup()
+			localFile.Close()
 			return
 		}
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-sigCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	go func() { <-ctx.Done(); sender.Close() }()
+
 	progress := rdt.NewProgressBar(fileInfo.Size())
 	buf := make([]byte, rdt.MSS)
 	for {
+		select {
+		case <-ctx.Done():
+			io.WriteString(conn, "ABOR\r\n")
+			reply, _ := tcpctrl.ReadLine(conn)
+			fmt.Println("\r\n" + reply)
+			goto stouDone
+		default:
+		}
 		n, err := localFile.Read(buf)
 		if n > 0 {
 			if sendErr := sender.Send(buf[:n]); sendErr != nil {
+				if ctx.Err() != nil {
+					goto stouDone
+				}
 				fmt.Printf("Send error: %v\n", sendErr)
 				break
 			}
@@ -672,12 +829,15 @@ func handleSTOU(conn net.Conn, filename string) {
 			break
 		}
 	}
-	time.Sleep(200 * time.Millisecond)
+stouDone:
 	sender.Close()
 	progress.Done()
-
-	reply, _ = tcpctrl.ReadLine(conn)
-	fmt.Println(reply)
+	localFile.Close()
+	cleanup()
+	if ctx.Err() == nil {
+		reply, _ := tcpctrl.ReadLine(conn)
+		fmt.Println("\r" + reply)
+	}
 }
 
 func handleAPPE(conn net.Conn, filename string) {
@@ -695,11 +855,11 @@ func handleAPPE(conn net.Conn, filename string) {
 		fmt.Printf("Cannot open local file: %v\n", err)
 		return
 	}
-	defer localFile.Close()
 
 	fileInfo, err := localFile.Stat()
 	if err != nil {
 		fmt.Printf("Cannot stat local file: %v\n", err)
+		localFile.Close()
 		return
 	}
 
@@ -707,15 +867,16 @@ func handleAPPE(conn net.Conn, filename string) {
 	reply, _ := tcpctrl.ReadLine(conn)
 	fmt.Println(reply)
 	if !strings.HasPrefix(reply, "150") {
+		localFile.Close()
 		return
 	}
 
 	udpConn, cleanup, err := prepareDataTransfer()
 	if err != nil {
 		fmt.Println(err)
+		localFile.Close()
 		return
 	}
-	defer cleanup()
 
 	sessionID := uint32(1)
 	sender := rdt.NewSender(udpConn, sessionID)
@@ -726,21 +887,47 @@ func handleAPPE(conn net.Conn, filename string) {
 			fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
 		if err := sender.Connect(udpAddr); err != nil {
 			fmt.Printf("RDT connect: %v\n", err)
+			cleanup()
+			localFile.Close()
 			return
 		}
 	case modePORT:
 		if err := sender.Accept(); err != nil {
 			fmt.Printf("RDT accept: %v\n", err)
+			cleanup()
+			localFile.Close()
 			return
 		}
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-sigCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	go func() { <-ctx.Done(); sender.Close() }()
+
 	progress := rdt.NewProgressBar(fileInfo.Size())
 	buf := make([]byte, rdt.MSS)
 	for {
+		select {
+		case <-ctx.Done():
+			io.WriteString(conn, "ABOR\r\n")
+			reply, _ := tcpctrl.ReadLine(conn)
+			fmt.Println("\r\n" + reply)
+			goto appeDone
+		default:
+		}
 		n, err := localFile.Read(buf)
 		if n > 0 {
 			if sendErr := sender.Send(buf[:n]); sendErr != nil {
+				if ctx.Err() != nil {
+					goto appeDone
+				}
 				fmt.Printf("Send error: %v\n", sendErr)
 				break
 			}
@@ -754,10 +941,13 @@ func handleAPPE(conn net.Conn, filename string) {
 			break
 		}
 	}
-	time.Sleep(200 * time.Millisecond)
+appeDone:
 	sender.Close()
 	progress.Done()
-
-	reply, _ = tcpctrl.ReadLine(conn)
-	fmt.Println(reply)
+	localFile.Close()
+	cleanup()
+	if ctx.Err() == nil {
+		reply, _ := tcpctrl.ReadLine(conn)
+		fmt.Println("\r" + reply)
+	}
 }

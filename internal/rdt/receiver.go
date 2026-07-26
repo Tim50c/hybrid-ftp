@@ -20,7 +20,7 @@ const (
 )
 
 type Receiver struct {
-	conn        *net.UDPConn
+	conn        UDPConn
 	sessionID   uint32
 	remoteAddr  *net.UDPAddr
 	mu          sync.Mutex
@@ -36,8 +36,8 @@ type Receiver struct {
 	closeOnce   sync.Once
 }
 
-func NewReceiver(conn *net.UDPConn, sessionID uint32) *Receiver {
-	const baseWindow = 256 * 1024
+func NewReceiver(conn UDPConn, sessionID uint32) *Receiver {
+	const baseWindow uint32 = 256 * 1024
 	scale := uint8(0)
 	for (uint32(65535) << scale) < baseWindow && scale < 7 {
 		scale++
@@ -76,7 +76,7 @@ func (r *Receiver) Accept() error {
 			continue
 		}
 
-		if hdr.SessionID != r.sessionID || hdr.Flags != FlagSYN {
+		if hdr.SessionID != r.sessionID || hdr.Flags&0x1F != FlagSYN {
 			continue
 		}
 
@@ -100,7 +100,7 @@ func (r *Receiver) Accept() error {
 			if !VerifyChecksum(buf[:n]) {
 				continue
 			}
-			if hdr.SessionID != r.sessionID || hdr.Flags != FlagACK {
+			if hdr.SessionID != r.sessionID || hdr.Flags&0x1F != FlagACK {
 				continue
 			}
 			break
@@ -138,7 +138,7 @@ func (r *Receiver) Connect(addr *net.UDPAddr) error {
 		if !VerifyChecksum(buf[:n]) {
 			continue
 		}
-		if hdr.SessionID != r.sessionID || hdr.Flags != (FlagSYN|FlagACK) {
+		if hdr.SessionID != r.sessionID || hdr.Flags&0x1F != (FlagSYN|FlagACK) {
 			continue
 		}
 
@@ -295,7 +295,7 @@ func (r *Receiver) receiveLoop() {
 			log.Printf("[RDT] receiver got RST, closing")
 			r.state = recvClosed
 			r.mu.Unlock()
-			close(r.done)
+			r.Close()
 			return
 
 		case hdr.Flags&FlagFIN != 0:
@@ -309,7 +309,7 @@ func (r *Receiver) receiveLoop() {
 			if !hasBuffered {
 				return
 			}
-			postFinDeadline = time.Now().Add(2 * time.Second)
+			postFinDeadline = time.Now().Add(4 * time.Second)
 
 		case hdr.Flags&FlagDATA != 0:
 			r.handleData(hdr, payload)

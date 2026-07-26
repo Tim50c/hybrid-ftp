@@ -77,7 +77,23 @@ func startServer(t *testing.T) (*exec.Cmd, func()) {
 		t.Fatalf("start server: %v", err)
 	}
 
-	time.Sleep(500 * time.Millisecond)
+	addr := net.JoinHostPort("127.0.0.1", ctrlPort)
+	deadline := time.Now().Add(5 * time.Second)
+	var dialErr error
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			dialErr = nil
+			break
+		}
+		dialErr = err
+		time.Sleep(200 * time.Millisecond)
+	}
+	if dialErr != nil {
+		cmd.Process.Kill()
+		t.Fatalf("server failed to start on %s: %v", addr, dialErr)
+	}
 
 	return cmd, func() {
 		cmd.Process.Signal(os.Interrupt)
@@ -90,6 +106,15 @@ func startServer(t *testing.T) (*exec.Cmd, func()) {
 			<-done
 		}
 	}
+}
+
+func mustDial(t *testing.T, addr string) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial %s: %v", addr, err)
+	}
+	return conn
 }
 
 type ftpConn struct {
@@ -166,7 +191,7 @@ func TestE2E_AuthFail(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -182,7 +207,7 @@ func TestE2E_UploadDownload(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -235,7 +260,7 @@ func TestE2E_ManualInteractiveFlow(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -312,7 +337,7 @@ func TestE2E_List(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -351,7 +376,7 @@ func TestE2E_PATH_Containment(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -372,7 +397,7 @@ func TestE2E_CWD(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -407,7 +432,7 @@ func TestE2E_MKD_RMD(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -442,7 +467,7 @@ func TestE2E_DELE(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -467,7 +492,7 @@ func TestE2E_CDUP(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -489,7 +514,7 @@ func TestE2E_NLST(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -519,7 +544,7 @@ func TestE2E_SIZE_MDTM(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -544,7 +569,7 @@ func TestE2E_RNFR_RNTO(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -553,6 +578,7 @@ func TestE2E_RNFR_RNTO(t *testing.T) {
 	fc.sendAndRead(t, "PASS admin")
 
 	os.WriteFile(filepath.Join(rootDir, "original.txt"), []byte("data"), 0644)
+	os.Remove(filepath.Join(rootDir, "renamed.txt"))
 
 	if r := fc.sendAndRead(t, "RNFR original.txt"); !strings.HasPrefix(r, "350") {
 		t.Fatalf("RNFR: expected 350, got %s", r)
@@ -571,7 +597,7 @@ func TestE2E_STOU(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -613,7 +639,7 @@ func TestE2E_APPE(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -656,7 +682,7 @@ func TestE2E_HASH(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -685,7 +711,7 @@ func TestE2E_MODE(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -707,7 +733,7 @@ func TestE2E_NOOP_HELP(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -729,7 +755,7 @@ func TestE2E_PORT_Transfer(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -845,7 +871,7 @@ func TestE2E_STAT(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -874,7 +900,7 @@ func TestE2E_ABOR(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1063,7 +1089,7 @@ func TestE2E_BinaryFileTransfer(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1107,7 +1133,7 @@ func TestE2E_STOR_Binary(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1178,7 +1204,7 @@ func TestE2E_LargeFileTransfer_NoLoss(t *testing.T) {
 	_, cleanup := startServer(t)
 	defer cleanup()
 
-	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	conn := mustDial(t, ":"+ctrlPort)
 	defer conn.Close()
 	fc := newFTPConn(t, conn)
 
@@ -1300,4 +1326,582 @@ func doRDTDownload(t *testing.T, host string, port int) ([]byte, error) {
 	}
 }
 
+func TestE2E_PASV_MultiTransfer(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn := mustDial(t, ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	os.WriteFile(filepath.Join(rootDir, "first.txt"), []byte("first file content\n"), 0644)
+	os.WriteFile(filepath.Join(rootDir, "second.txt"), []byte("second file content\n"), 0644)
+
+	reply := fc.sendAndRead(t, "PASV")
+	if !strings.HasPrefix(reply, "227") {
+		t.Fatalf("PASV: expected 227, got %s", reply)
+	}
+	host, port, err := parsePASVReply(reply)
+	if err != nil {
+		t.Fatalf("parse PASV: %v", err)
+	}
+
+	r := fc.sendAndRead(t, "RETR first.txt")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("first RETR: expected 150, got %s", r)
+	}
+	data1, err := doRDTDownload(t, host, port)
+	if err != nil {
+		t.Fatalf("first download: %v", err)
+	}
+	if !bytes.Equal(data1, []byte("first file content\n")) {
+		t.Errorf("first file mismatch: got %q", string(data1))
+	}
+	time.Sleep(500 * time.Millisecond)
+	fc.readReply(t)
+
+	r = fc.sendAndRead(t, "RETR second.txt")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("second RETR: expected 150, got %s", r)
+	}
+	data2, err := doRDTDownload(t, host, port)
+	if err != nil {
+		t.Fatalf("second download: %v", err)
+	}
+	if !bytes.Equal(data2, []byte("second file content\n")) {
+		t.Errorf("second file mismatch: got %q", string(data2))
+	}
+	time.Sleep(500 * time.Millisecond)
+	fc.readReply(t)
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_PASV_UploadThenDownload(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn := mustDial(t, ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	payload := []byte("upload then download test payload\n")
+
+	reply := fc.sendAndRead(t, "PASV")
+	if !strings.HasPrefix(reply, "227") {
+		t.Fatalf("PASV: expected 227, got %s", reply)
+	}
+	host, port, _ := parsePASVReply(reply)
+
+	r := fc.sendAndRead(t, "STOR up.bin")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("STOR: expected 150, got %s", r)
+	}
+	addr := fmt.Sprintf("%s:%d", host, port)
+	udpAddr, _ := net.ResolveUDPAddr("udp", addr)
+	udpConn, _ := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
+	sender := rdt.NewSender(udpConn, 1)
+	sender.Connect(udpAddr)
+	sender.Send(payload)
+	time.Sleep(200 * time.Millisecond)
+	sender.Close()
+	udpConn.Close()
+
+	time.Sleep(500 * time.Millisecond)
+	fc.readReply(t)
+
+	r = fc.sendAndRead(t, "RETR up.bin")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("RETR after STOR: expected 150, got %s", r)
+	}
+	data, err := doRDTDownload(t, host, port)
+	if err != nil {
+		t.Fatalf("download after upload: %v", err)
+	}
+	if !bytes.Equal(data, payload) {
+		t.Errorf("data mismatch: got %d bytes, want %d bytes", len(data), len(payload))
+	}
+	time.Sleep(500 * time.Millisecond)
+	fc.readReply(t)
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_LargeFileTransfer_WithHASH(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn := mustDial(t, ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	const payloadSize = 1 * 1024 * 1024
+	payload := make([]byte, payloadSize)
+	for i := range payload {
+		payload[i] = byte(i % 256)
+	}
+	if err := os.WriteFile(filepath.Join(rootDir, "big.bin"), payload, 0644); err != nil {
+		t.Fatalf("write sample: %v", err)
+	}
+
+	reply := fc.sendAndRead(t, "PASV")
+	host, port, err := parsePASVReply(reply)
+	if err != nil {
+		t.Fatalf("parse PASV: %v", err)
+	}
+
+	reply = fc.sendAndRead(t, "RETR big.bin")
+	if !strings.HasPrefix(reply, "150") {
+		t.Fatalf("expected 150, got %s", reply)
+	}
+
+	data, err := doRDTDownloadWithTimeout(t, host, port, 30*time.Second)
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+
+	if len(data) != payloadSize {
+		t.Fatalf("size mismatch: got %d, want %d", len(data), payloadSize)
+	}
+	if !bytes.Equal(data, payload) {
+		diff := findFirstDiff(data, payload)
+		t.Errorf("content mismatch at byte %d", diff)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	fc.readReply(t)
+
+	r := fc.sendAndRead(t, "HASH big.bin")
+	if !strings.HasPrefix(r, "213") {
+		t.Errorf("HASH: expected 213, got %s", r)
+	}
+
+	wantHash, _ := computeSHA256Hex(payload)
+	if !strings.Contains(r, wantHash) {
+		t.Errorf("HASH reply missing expected hash %s", wantHash)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_ZeroByteFile(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn := mustDial(t, ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	if err := os.WriteFile(filepath.Join(rootDir, "empty.txt"), []byte{}, 0644); err != nil {
+		t.Fatalf("write empty: %v", err)
+	}
+
+	reply := fc.sendAndRead(t, "PASV")
+	host, port, _ := parsePASVReply(reply)
+
+	r := fc.sendAndRead(t, "RETR empty.txt")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("RETR: expected 150, got %s", r)
+	}
+
+	data, err := doRDTDownload(t, host, port)
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+
+	if len(data) != 0 {
+		t.Errorf("expected 0 bytes, got %d bytes", len(data))
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	fc.readReply(t)
+
+	r = fc.sendAndRead(t, "HASH empty.txt")
+	if !strings.HasPrefix(r, "213") {
+		t.Errorf("HASH empty: expected 213, got %s", r)
+	}
+	emptyHash := fmt.Sprintf("%x", sha256.Sum256([]byte{}))
+	if !strings.Contains(r, emptyHash) {
+		t.Errorf("empty file hash should be %s, got %s", emptyHash, r)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_ABOR_MidTransfer(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn := mustDial(t, ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	const payloadSize = 500 * 1024
+	payload := make([]byte, payloadSize)
+	for i := range payload {
+		payload[i] = byte(i % 256)
+	}
+	os.WriteFile(filepath.Join(rootDir, "abort_me.bin"), payload, 0644)
+
+	reply := fc.sendAndRead(t, "PASV")
+	host, port, _ := parsePASVReply(reply)
+
+	r := fc.sendAndRead(t, "RETR abort_me.bin")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("RETR: expected 150, got %s", r)
+	}
+
+	go doRDTDownloadWithTimeout(t, host, port, 10*time.Second)
+
+	time.Sleep(100 * time.Millisecond)
+
+	aborReply := fc.sendAndRead(t, "ABOR")
+	if !strings.HasPrefix(aborReply, "226") {
+		t.Logf("ABOR reply: %s (expected 226 or 426)", aborReply)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_MultipleSequentialTransfers(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn := mustDial(t, ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	files := map[string][]byte{
+		"seq1.txt": []byte("first sequential file"),
+		"seq2.txt": []byte("second sequential file"),
+		"seq3.txt": []byte("third sequential file"),
+		"seq4.txt": []byte("fourth sequential file"),
+		"seq5.txt": []byte("fifth sequential file"),
+	}
+
+	for name, content := range files {
+		os.WriteFile(filepath.Join(rootDir, name), content, 0644)
+
+		reply := fc.sendAndRead(t, "PASV")
+		host, port, _ := parsePASVReply(reply)
+
+		r := fc.sendAndRead(t, "RETR " + name)
+		if !strings.HasPrefix(r, "150") {
+			t.Fatalf("RETR %s: expected 150, got %s", name, r)
+		}
+
+		data, err := doRDTDownload(t, host, port)
+		if err != nil {
+			t.Fatalf("download %s: %v", name, err)
+		}
+		if !bytes.Equal(data, content) {
+			t.Errorf("%s: got %q, want %q", name, string(data), string(content))
+		}
+
+		time.Sleep(300 * time.Millisecond)
+		fc.readReply(t)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_RoundTripHashCheck(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn := mustDial(t, ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	payload := []byte("Round-trip hash verification payload data\nSecond line for good measure.\n")
+
+	reply := fc.sendAndRead(t, "PASV")
+	host, port, _ := parsePASVReply(reply)
+
+	r := fc.sendAndRead(t, "STOR roundtrip.bin")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("STOR: expected 150, got %s", r)
+	}
+
+	addr := fmt.Sprintf("%s:%d", host, port)
+	udpAddr, _ := net.ResolveUDPAddr("udp", addr)
+	udpConn, _ := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
+	sender := rdt.NewSender(udpConn, 1)
+	sender.Connect(udpAddr)
+	sender.Send(payload)
+	time.Sleep(200 * time.Millisecond)
+	sender.Close()
+	udpConn.Close()
+
+	time.Sleep(500 * time.Millisecond)
+	fc.readReply(t)
+
+	r = fc.sendAndRead(t, "HASH roundtrip.bin")
+	if !strings.HasPrefix(r, "213") {
+		t.Fatalf("HASH after STOR: expected 213, got %s", r)
+	}
+
+	wantHash, _ := computeSHA256Hex(payload)
+	if !strings.Contains(r, wantHash) {
+		t.Errorf("HASH mismatch: want %s in reply, got %s", wantHash, r)
+	}
+
+	reply = fc.sendAndRead(t, "PASV")
+	host, port, _ = parsePASVReply(reply)
+
+	r = fc.sendAndRead(t, "RETR roundtrip.bin")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("RETR: expected 150, got %s", r)
+	}
+
+	data, err := doRDTDownload(t, host, port)
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+
+	if !bytes.Equal(data, payload) {
+		t.Errorf("round-trip data mismatch: got %d bytes, want %d bytes", len(data), len(payload))
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	fc.readReply(t)
+
+	r = fc.sendAndRead(t, "HASH roundtrip.bin")
+	if !strings.HasPrefix(r, "213") {
+		t.Errorf("HASH after RETR: expected 213, got %s", r)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_SIZE_AfterTransfer(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn := mustDial(t, ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	payload := []byte("size test data file content")
+	payloadSize := len(payload)
+	os.WriteFile(filepath.Join(rootDir, "sizetest.txt"), payload, 0644)
+
+	reply := fc.sendAndRead(t, "PASV")
+	host, port, _ := parsePASVReply(reply)
+
+	r := fc.sendAndRead(t, "RETR sizetest.txt")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("RETR: expected 150, got %s", r)
+	}
+
+	data, err := doRDTDownload(t, host, port)
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	fc.readReply(t)
+
+	r = fc.sendAndRead(t, "SIZE sizetest.txt")
+	if !strings.HasPrefix(r, "213") {
+		t.Errorf("SIZE: expected 213, got %s", r)
+	}
+
+	if len(data) != payloadSize {
+		t.Errorf("downloaded size %d != expected %d", len(data), payloadSize)
+	}
+
+	sizeStr := fmt.Sprintf("%d", payloadSize)
+	if !strings.Contains(r, sizeStr) {
+		t.Errorf("SIZE reply should contain %s, got %s", sizeStr, r)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestE2E_ConcurrentTransfers(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	os.WriteFile(filepath.Join(rootDir, "concurrent.bin"), bytes.Repeat([]byte("X"), 100000), 0644)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 3)
+
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			conn, err := net.Dial("tcp", ":"+ctrlPort)
+			if err != nil {
+				errs <- fmt.Errorf("session %d dial: %v", id, err)
+				return
+			}
+			defer conn.Close()
+			fc := newFTPConn(t, conn)
+
+			fc.sendAndRead(t, "")
+			fc.sendAndRead(t, "USER admin")
+			fc.sendAndRead(t, "PASS admin")
+
+			reply := fc.sendAndRead(t, "PASV")
+			host, port, _ := parsePASVReply(reply)
+
+			r := fc.sendAndRead(t, "RETR concurrent.bin")
+			if !strings.HasPrefix(r, "150") {
+				errs <- fmt.Errorf("session %d RETR: %s", id, r)
+				return
+			}
+
+			data, err := doRDTDownload(t, host, port)
+			if err != nil {
+				errs <- fmt.Errorf("session %d download: %v", id, err)
+				return
+			}
+
+			if len(data) != 100000 {
+				errs <- fmt.Errorf("session %d: got %d bytes, want 100000", id, len(data))
+				return
+			}
+
+			time.Sleep(300 * time.Millisecond)
+			fc.readReply(t)
+			fc.sendAndRead(t, "QUIT")
+		}(i)
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+func TestE2E_PORT_RoundTrip_HASH(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	conn := mustDial(t, ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	payload := []byte("PORT mode round-trip hash check data")
+
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen udp: %v", err)
+	}
+	defer udpConn.Close()
+
+	localPort := udpConn.LocalAddr().(*net.UDPAddr).Port
+	p1 := localPort / 256
+	p2 := localPort % 256
+	portCmd := fmt.Sprintf("PORT 127,0,0,1,%d,%d", p1, p2)
+
+	if r := fc.sendAndRead(t, portCmd); !strings.HasPrefix(r, "200") {
+		t.Fatalf("PORT: expected 200, got %s", r)
+	}
+
+	r := fc.sendAndRead(t, "STOR port_stor.bin")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("STOR: expected 150, got %s", r)
+	}
+
+	sender := rdt.NewSender(udpConn, 1)
+	sender.Accept()
+	sender.Send(payload)
+	time.Sleep(200 * time.Millisecond)
+	sender.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	fc.readReply(t)
+
+	r = fc.sendAndRead(t, "HASH port_stor.bin")
+	if !strings.HasPrefix(r, "213") {
+		t.Fatalf("HASH: expected 213, got %s", r)
+	}
+	wantHash, _ := computeSHA256Hex(payload)
+	if !strings.Contains(r, wantHash) {
+		t.Errorf("HASH mismatch: expected %s in reply", wantHash)
+	}
+
+	udpConn2, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	defer udpConn2.Close()
+	localPort2 := udpConn2.LocalAddr().(*net.UDPAddr).Port
+	portCmd2 := fmt.Sprintf("PORT 127,0,0,1,%d,%d", localPort2/256, localPort2%256)
+	fc.sendAndRead(t, portCmd2)
+
+	r = fc.sendAndRead(t, "RETR port_stor.bin")
+	if !strings.HasPrefix(r, "150") {
+		t.Fatalf("RETR: expected 150, got %s", r)
+	}
+
+	receiver := rdt.NewReceiver(udpConn2, 1)
+	go func() {
+		receiver.Accept()
+	}()
+	time.Sleep(200 * time.Millisecond)
+
+	var data []byte
+	recvDone := make(chan struct{})
+	go func() {
+		for chunk := range receiver.Receive() {
+			data = append(data, chunk...)
+		}
+		close(recvDone)
+	}()
+
+	select {
+	case <-recvDone:
+	case <-time.After(10 * time.Second):
+		receiver.Close()
+		<-recvDone
+	}
+
+	if !bytes.Equal(data, payload) {
+		t.Errorf("PORT round-trip: got %d bytes, want %d", len(data), len(payload))
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
 

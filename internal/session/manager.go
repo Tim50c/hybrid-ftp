@@ -8,20 +8,21 @@ import (
 )
 
 type Session struct {
-	ID             uint32
-	Conn           net.Conn
-	Username       string
-	Authenticated  bool
-	CWD            string
-	DataConn       *net.UDPConn
-	DataMode       string
-	DataAddr       *net.UDPAddr
-	TransferType   byte
-	RnfrPath       string
-	TransferCtx    context.Context
-	TransferCancel context.CancelFunc
-	Ctx            context.Context
-	Cancel         context.CancelFunc
+	ID              uint32
+	Conn            net.Conn
+	Username        string
+	Authenticated   bool
+	CWD             string
+	DataConn        *net.UDPConn
+	DataMode        string
+	DataAddr        *net.UDPAddr
+	TransferType    byte
+	RnfrPath        string
+	TransferCtx     context.Context
+	TransferCancel  context.CancelFunc
+	Ctx             context.Context
+	Cancel          context.CancelFunc
+	TransferReplied bool
 }
 
 type Manager struct {

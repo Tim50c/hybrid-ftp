@@ -81,11 +81,14 @@ func setupDataReceiver(sess *session.Session) (*rdt.Receiver, error) {
 }
 
 func cleanupDataConn(sess *session.Session) {
-	if sess.DataConn != nil {
-		sess.DataConn.Close()
-		sess.DataConn = nil
+	if sess.DataMode == "PORT" {
+		if sess.DataConn != nil {
+			sess.DataConn.Close()
+			sess.DataConn = nil
+		}
+		sess.DataMode = ""
+		sess.DataAddr = nil
 	}
-	sess.DataMode = ""
 }
 
 func dataModeReady(sess *session.Session) bool {
@@ -97,6 +100,7 @@ func dataModeReady(sess *session.Session) bool {
 
 func handleUSER(conn net.Conn, sess *session.Session, usersPath string, args string) {
 	sess.Username = args
+	sess.Authenticated = false
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyNeedPassword, "Password required.")
 }
 
@@ -130,12 +134,17 @@ func handleCWD(conn net.Conn, sess *session.Session, root string, args string) {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
 		return
 	}
+	resolved := fs.ResolvePath(sess, args)
+	if resolved == sess.CWD && strings.Contains(args, "..") {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
+		return
+	}
 	info, err := os.Stat(fullPath)
 	if err != nil || !info.IsDir() {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Directory not found.")
 		return
 	}
-	sess.CWD = fs.ResolvePath(sess, args)
+	sess.CWD = resolved
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileActionOK, "Directory changed.")
 }
 
@@ -219,17 +228,18 @@ func handleLIST(conn net.Conn, sess *session.Session, root string, args string) 
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
 		return
 	}
+
+	if !dataModeReady(sess) {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		return
+	}
+
 	infos, err := fs.ListDir(fullPath)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot list directory.")
 		return
 	}
 	listing := fs.FormatList(infos)
-
-	if !dataModeReady(sess) {
-		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
-		return
-	}
 
 	tcpctrl.WriteReply(conn, tcpctrl.ReplyFileOK, "Opening data connection for directory listing.")
 
@@ -240,17 +250,26 @@ func handleLIST(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 
 	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
-	defer func() {
-		sess.TransferCancel()
-		sess.TransferCancel = nil
-		sess.TransferCtx = nil
+	sess.TransferReplied = false
+	go func() {
+		defer func() {
+			sess.TransferCancel()
+			sess.TransferCancel = nil
+			sess.TransferCtx = nil
+		}()
+
+		serverSender.Send([]byte(listing))
+		serverSender.Close()
+		cleanupDataConn(sess)
+
+		select {
+		case <-sess.TransferCtx.Done():
+			return
+		default:
+		}
+		sess.TransferReplied = true
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Directory listing complete.")
 	}()
-
-	serverSender.Send([]byte(listing))
-	serverSender.Close()
-	cleanupDataConn(sess)
-
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Directory listing complete.")
 }
 
 func handleRETR(conn net.Conn, sess *session.Session, root string, args string) {
@@ -268,10 +287,10 @@ func handleRETR(conn net.Conn, sess *session.Session, root string, args string) 
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, fmt.Sprintf("Cannot open %s.", args))
 		return
 	}
-	defer file.Close()
 
 	if !dataModeReady(sess) {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		file.Close()
 		return
 	}
 
@@ -281,47 +300,49 @@ func handleRETR(conn net.Conn, sess *session.Session, root string, args string) 
 	serverSender, err := setupDataSender(sess)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		file.Close()
 		return
 	}
 
 	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
-	defer func() {
-		sess.TransferCancel()
-		sess.TransferCancel = nil
-		sess.TransferCtx = nil
-	}()
-
-	buf := make([]byte, 1400)
-	for {
-		select {
-		case <-sess.TransferCtx.Done():
-			log.Printf("[CTRL] transfer aborted by ABOR")
-			tcpctrl.WriteReply(conn, tcpctrl.ReplyTransferAborted, "Transfer aborted.")
-			cleanupDataConn(sess)
-			return
-		default:
-		}
-		n, err := file.Read(buf)
-		if n > 0 {
-			if sendErr := serverSender.Send(buf[:n]); sendErr != nil {
-				log.Printf("[CTRL] send error: %v", sendErr)
-				break
-			}
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			log.Printf("[CTRL] read error: %v", err)
+	sess.TransferReplied = false
+	go func() {
+		defer func() {
+			sess.TransferCancel()
+			sess.TransferCancel = nil
+			sess.TransferCtx = nil
+			file.Close()
 			serverSender.Close()
 			cleanupDataConn(sess)
-			tcpctrl.WriteReply(conn, tcpctrl.ReplyTransferAborted, "Transfer aborted.")
-			return
+		}()
+
+		buf := make([]byte, 1400)
+		for {
+			select {
+			case <-sess.TransferCtx.Done():
+				log.Printf("[CTRL] transfer aborted by ABOR")
+				return
+			default:
+			}
+			n, err := file.Read(buf)
+			if n > 0 {
+				if sendErr := serverSender.Send(buf[:n]); sendErr != nil {
+					log.Printf("[CTRL] send error: %v", sendErr)
+					return
+				}
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				log.Printf("[CTRL] read error: %v", err)
+				return
+			}
 		}
-	}
-	serverSender.Close()
-	cleanupDataConn(sess)
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Transfer complete.")
+
+		sess.TransferReplied = true
+			tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Transfer complete.")
+	}()
 }
 
 func handleSTOR(conn net.Conn, sess *session.Session, root string, args string) {
@@ -339,10 +360,10 @@ func handleSTOR(conn net.Conn, sess *session.Session, root string, args string) 
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, fmt.Sprintf("Cannot create %s.", args))
 		return
 	}
-	defer file.Close()
 
 	if !dataModeReady(sess) {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		file.Close()
 		return
 	}
 
@@ -352,37 +373,38 @@ func handleSTOR(conn net.Conn, sess *session.Session, root string, args string) 
 	serverReceiver, err := setupDataReceiver(sess)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		file.Close()
 		return
 	}
 
 	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
-	defer func() {
-		sess.TransferCancel()
-		sess.TransferCancel = nil
-		sess.TransferCtx = nil
-	}()
-
-	for chunk := range serverReceiver.Receive() {
-		select {
-		case <-sess.TransferCtx.Done():
-			log.Printf("[CTRL] transfer aborted by ABOR")
-			tcpctrl.WriteReply(conn, tcpctrl.ReplyTransferAborted, "Transfer aborted.")
-			cleanupDataConn(sess)
-			return
-		default:
-		}
-		if _, err := file.Write(chunk); err != nil {
-			log.Printf("[CTRL] write error: %v", err)
+	sess.TransferReplied = false
+	go func() {
+		defer func() {
+			sess.TransferCancel()
+			sess.TransferCancel = nil
+			sess.TransferCtx = nil
+			file.Close()
 			serverReceiver.Close()
 			cleanupDataConn(sess)
-			tcpctrl.WriteReply(conn, tcpctrl.ReplyTransferAborted, "Transfer aborted.")
-			return
-		}
-	}
-	serverReceiver.Close()
-	cleanupDataConn(sess)
+		}()
 
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Transfer complete.")
+		for chunk := range serverReceiver.Receive() {
+			select {
+			case <-sess.TransferCtx.Done():
+				log.Printf("[CTRL] transfer aborted by ABOR")
+				return
+			default:
+			}
+			if _, err := file.Write(chunk); err != nil {
+				log.Printf("[CTRL] write error: %v", err)
+				return
+			}
+		}
+
+		sess.TransferReplied = true
+			tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Transfer complete.")
+	}()
 }
 
 func handleNOOP(conn net.Conn, sess *session.Session, root string, args string) {
@@ -400,6 +422,10 @@ func handleCDUP(conn net.Conn, sess *session.Session, root string, args string) 
 func handleMKD(conn net.Conn, sess *session.Session, root string, args string) {
 	if args == "" {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyParamError, "MKD requires a directory name.")
+		return
+	}
+	if strings.Contains(args, "..") {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Access denied.")
 		return
 	}
 	if err := fs.MakeDir(root, sess, args); err != nil {
@@ -567,16 +593,26 @@ func handleNLST(conn net.Conn, sess *session.Session, root string, args string) 
 	}
 
 	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
-	defer func() {
-		sess.TransferCancel()
-		sess.TransferCancel = nil
-		sess.TransferCtx = nil
-	}()
+	sess.TransferReplied = false
+	go func() {
+		defer func() {
+			sess.TransferCancel()
+			sess.TransferCancel = nil
+			sess.TransferCtx = nil
+		}()
 
-	sender.Send([]byte(listing))
-	sender.Close()
-	cleanupDataConn(sess)
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Name list complete.")
+		sender.Send([]byte(listing))
+		sender.Close()
+		cleanupDataConn(sess)
+
+		select {
+		case <-sess.TransferCtx.Done():
+			return
+		default:
+		}
+		sess.TransferReplied = true
+			tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Name list complete.")
+	}()
 }
 
 func handleAPPE(conn net.Conn, sess *session.Session, root string, args string) {
@@ -594,10 +630,10 @@ func handleAPPE(conn net.Conn, sess *session.Session, root string, args string) 
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot open file for append.")
 		return
 	}
-	defer file.Close()
 
 	if !dataModeReady(sess) {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		file.Close()
 		return
 	}
 
@@ -606,36 +642,38 @@ func handleAPPE(conn net.Conn, sess *session.Session, root string, args string) 
 	receiver, err := setupDataReceiver(sess)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		file.Close()
 		return
 	}
 
 	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
-	defer func() {
-		sess.TransferCancel()
-		sess.TransferCancel = nil
-		sess.TransferCtx = nil
-	}()
-
-	for chunk := range receiver.Receive() {
-		select {
-		case <-sess.TransferCtx.Done():
-			log.Printf("[CTRL] transfer aborted by ABOR")
-			tcpctrl.WriteReply(conn, tcpctrl.ReplyTransferAborted, "Transfer aborted.")
-			cleanupDataConn(sess)
-			return
-		default:
-		}
-		if _, err := file.Write(chunk); err != nil {
-			log.Printf("[CTRL] write error: %v", err)
+	sess.TransferReplied = false
+	go func() {
+		defer func() {
+			sess.TransferCancel()
+			sess.TransferCancel = nil
+			sess.TransferCtx = nil
+			file.Close()
 			receiver.Close()
-			tcpctrl.WriteReply(conn, tcpctrl.ReplyTransferAborted, "Transfer aborted.")
 			cleanupDataConn(sess)
-			return
+		}()
+
+		for chunk := range receiver.Receive() {
+			select {
+			case <-sess.TransferCtx.Done():
+				log.Printf("[CTRL] transfer aborted by ABOR")
+				return
+			default:
+			}
+			if _, err := file.Write(chunk); err != nil {
+				log.Printf("[CTRL] write error: %v", err)
+				return
+			}
 		}
-	}
-	receiver.Close()
-	cleanupDataConn(sess)
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Transfer complete.")
+
+		sess.TransferReplied = true
+			tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Transfer complete.")
+	}()
 }
 
 func handleSTOU(conn net.Conn, sess *session.Session, root string, args string) {
@@ -654,10 +692,10 @@ func handleSTOU(conn net.Conn, sess *session.Session, root string, args string) 
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyFileUnavail, "Cannot create file.")
 		return
 	}
-	defer file.Close()
 
 	if !dataModeReady(sess) {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		file.Close()
 		return
 	}
 
@@ -666,36 +704,38 @@ func handleSTOU(conn net.Conn, sess *session.Session, root string, args string) 
 	receiver, err := setupDataReceiver(sess)
 	if err != nil {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyBadSequence, "Use PASV or PORT first.")
+		file.Close()
 		return
 	}
 
 	sess.TransferCtx, sess.TransferCancel = context.WithCancel(sess.Ctx)
-	defer func() {
-		sess.TransferCancel()
-		sess.TransferCancel = nil
-		sess.TransferCtx = nil
-	}()
-
-	for chunk := range receiver.Receive() {
-		select {
-		case <-sess.TransferCtx.Done():
-			log.Printf("[CTRL] transfer aborted by ABOR")
-			tcpctrl.WriteReply(conn, tcpctrl.ReplyTransferAborted, "Transfer aborted.")
-			cleanupDataConn(sess)
-			return
-		default:
-		}
-		if _, err := file.Write(chunk); err != nil {
-			log.Printf("[CTRL] write error: %v", err)
+	sess.TransferReplied = false
+	go func() {
+		defer func() {
+			sess.TransferCancel()
+			sess.TransferCancel = nil
+			sess.TransferCtx = nil
+			file.Close()
 			receiver.Close()
-			tcpctrl.WriteReply(conn, tcpctrl.ReplyTransferAborted, "Transfer aborted.")
 			cleanupDataConn(sess)
-			return
+		}()
+
+		for chunk := range receiver.Receive() {
+			select {
+			case <-sess.TransferCtx.Done():
+				log.Printf("[CTRL] transfer aborted by ABOR")
+				return
+			default:
+			}
+			if _, err := file.Write(chunk); err != nil {
+				log.Printf("[CTRL] write error: %v", err)
+				return
+			}
 		}
-	}
-	receiver.Close()
-	cleanupDataConn(sess)
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyPathCreated, fmt.Sprintf("\"%s\" stored.", uniqueName))
+
+		sess.TransferReplied = true
+			tcpctrl.WriteReply(conn, tcpctrl.ReplyPathCreated, fmt.Sprintf("\"%s\" stored.", uniqueName))
+	}()
 }
 
 func handleHASH(conn net.Conn, sess *session.Session, root string, args string) {
@@ -752,7 +792,9 @@ func handleABOR(conn net.Conn, sess *session.Session, root string, args string) 
 	if sess.TransferCancel != nil {
 		sess.TransferCancel()
 	}
-	tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "ABOR successful.")
+	if !sess.TransferReplied {
+		tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "ABOR successful.")
+	}
 }
 
 func handleMDTM(conn net.Conn, sess *session.Session, root string, args string) {
