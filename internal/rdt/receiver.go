@@ -20,7 +20,7 @@ const (
 )
 
 type Receiver struct {
-	conn        *net.UDPConn
+	conn        UDPConn
 	sessionID   uint32
 	remoteAddr  *net.UDPAddr
 	mu          sync.Mutex
@@ -35,7 +35,7 @@ type Receiver struct {
 	closeOnce   sync.Once
 }
 
-func NewReceiver(conn *net.UDPConn, sessionID uint32) *Receiver {
+func NewReceiver(conn UDPConn, sessionID uint32) *Receiver {
 	return &Receiver{
 		conn:       conn,
 		sessionID:  sessionID,
@@ -285,7 +285,7 @@ func (r *Receiver) receiveLoop() {
 			log.Printf("[RDT] receiver got RST, closing")
 			r.state = recvClosed
 			r.mu.Unlock()
-			close(r.done)
+			r.Close()
 			return
 
 		case hdr.Flags&FlagFIN != 0:
@@ -299,7 +299,7 @@ func (r *Receiver) receiveLoop() {
 			if !hasBuffered {
 				return
 			}
-			postFinDeadline = time.Now().Add(2 * time.Second)
+			postFinDeadline = time.Now().Add(4 * time.Second)
 
 		case hdr.Flags&FlagDATA != 0:
 			r.handleData(hdr, payload)

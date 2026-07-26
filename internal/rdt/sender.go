@@ -30,7 +30,7 @@ type packetRecord struct {
 }
 
 type Sender struct {
-	conn       *net.UDPConn
+	conn       UDPConn
 	sessionID  uint32
 	remoteAddr *net.UDPAddr
 	mu         sync.Mutex
@@ -45,6 +45,8 @@ type Sender struct {
 	ackCh      chan ackEvent
 	done       chan struct{}
 	errCh      chan error
+	closeOnce  sync.Once
+	activeSend bool
 }
 
 type ackEvent struct {
@@ -52,7 +54,7 @@ type ackEvent struct {
 	window uint16
 }
 
-func NewSender(conn *net.UDPConn, sessionID uint32) *Sender {
+func NewSender(conn UDPConn, sessionID uint32) *Sender {
 	s := &Sender{
 		conn:       conn,
 		sessionID:  sessionID,
@@ -198,20 +200,25 @@ func (s *Sender) Close() error {
 	s.state = sendFinSent
 	s.mu.Unlock()
 
-	for {
+	// Wait until outbox is empty and inflight stays empty for
+	// at least 200ms (grace period for sendLoop to resume).
+	emptyCount := 0
+	for emptyCount < 3 {
 		select {
 		case <-s.done:
 			return nil
 		default:
 		}
-		outboxDrained := len(s.outbox) == 0
 		s.mu.Lock()
-		inflightDrained := len(s.inflight) == 0
+		outboxEmpty := len(s.outbox) == 0 && !s.activeSend
+		inflightEmpty := len(s.inflight) == 0
 		s.mu.Unlock()
-		if outboxDrained && inflightDrained {
-			break
+		if outboxEmpty && inflightEmpty {
+			emptyCount++
+		} else {
+			emptyCount = 0
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	select {
@@ -270,6 +277,10 @@ func (s *Sender) sendLoop() {
 		case <-s.errCh:
 			return
 		}
+
+		s.mu.Lock()
+		s.activeSend = true
+		s.mu.Unlock()
 
 		offset := 0
 		for offset < len(data) {
@@ -338,6 +349,10 @@ func (s *Sender) sendLoop() {
 
 			offset = end
 		}
+
+		s.mu.Lock()
+		s.activeSend = false
+		s.mu.Unlock()
 	}
 }
 
@@ -381,13 +396,13 @@ func (s *Sender) recvLoop() {
 			log.Printf("[RDT] sender got RST")
 			s.state = sendClosed
 			s.mu.Unlock()
-			close(s.done)
+			s.closeOnce.Do(func() { close(s.done) })
 			return
 
 		case hdr.Flags&(FlagFIN|FlagACK) == FlagFIN|FlagACK:
 			s.state = sendClosed
 			s.mu.Unlock()
-			close(s.done)
+			s.closeOnce.Do(func() { close(s.done) })
 			return
 
 		case hdr.Flags&FlagACK != 0:
@@ -438,10 +453,11 @@ func (s *Sender) onTimeout(seq uint32) {
 		s.sendControl(0, 0, FlagRST)
 		s.state = sendClosed
 		go func() { s.errCh <- fmt.Errorf("max retransmits for seq %d", seq) }()
-		close(s.done)
+		s.closeOnce.Do(func() { close(s.done) })
 		return
 	}
 
 	log.Printf("[RDT] retransmitting seq=%d (attempt %d)", seq, rec.retransCount)
 	s.conn.WriteToUDP(rec.data, s.remoteAddr)
+	s.timers.Start(seq)
 }

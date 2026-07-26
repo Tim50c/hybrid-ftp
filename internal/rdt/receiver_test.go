@@ -274,3 +274,467 @@ func TestReceiver_HandlesPartialDelivery(t *testing.T) {
 	t.Skip("Documents a known limitation: receiver does not retransmit-request for buffered gaps after FIN")
 	_ = fmt.Sprintf
 }
+
+func TestReceiver_InOrderDelivery(t *testing.T) {
+	receiverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer receiverConn.Close()
+
+	peerConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer peerConn.Close()
+
+	const sessionID = uint32(101)
+	receiver := NewReceiver(receiverConn, sessionID)
+
+	acceptDone := make(chan error, 1)
+	go func() { acceptDone <- receiver.Accept() }()
+
+	time.Sleep(100 * time.Millisecond)
+
+	myISN := uint32(0x1000)
+	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), syn, nil)
+
+	synAckHdr := readAndCheckFlags(t, peerConn, FlagSYN|FlagACK)
+	serverISN := synAckHdr.SeqNum
+
+	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), ack, nil)
+
+	if err := <-acceptDone; err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+
+	chunks := []string{"AAAA", "BBBB", "CCCC", "DDDD"}
+	offset := uint32(0)
+	for _, c := range chunks {
+		seq := myISN + 1 + offset
+		pkt := makeRDTDataPacket(t, sessionID, seq, []byte(c))
+		peerConn.WriteToUDP(pkt, receiverConn.LocalAddr().(*net.UDPAddr))
+		offset += uint32(len(c))
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	fin := &Header{SessionID: sessionID, Flags: FlagFIN, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), fin, nil)
+
+	var got []byte
+	deadline := time.After(3 * time.Second)
+collect:
+	for {
+		select {
+		case chunk, ok := <-receiver.Receive():
+			if !ok {
+				break collect
+			}
+			got = append(got, chunk...)
+		case <-deadline:
+			t.Fatal("timeout waiting for output")
+		}
+	}
+
+	want := "AAAABBBBCCCCDDDD"
+	if string(got) != want {
+		t.Errorf("in-order delivery: got %q, want %q", string(got), want)
+	}
+
+	receiver.Close()
+}
+
+func TestReceiver_DuplicateDetection(t *testing.T) {
+	receiverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer receiverConn.Close()
+
+	peerConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer peerConn.Close()
+
+	const sessionID = uint32(102)
+	receiver := NewReceiver(receiverConn, sessionID)
+
+	acceptDone := make(chan error, 1)
+	go func() { acceptDone <- receiver.Accept() }()
+
+	time.Sleep(100 * time.Millisecond)
+
+	myISN := uint32(0x2000)
+	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), syn, nil)
+
+	synAckHdr := readAndCheckFlags(t, peerConn, FlagSYN|FlagACK)
+	serverISN := synAckHdr.SeqNum
+
+	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), ack, nil)
+
+	if err := <-acceptDone; err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+
+	seq := myISN + 1
+	pkt := makeRDTDataPacket(t, sessionID, seq, []byte("UNIQUE"))
+	peerConn.WriteToUDP(pkt, receiverConn.LocalAddr().(*net.UDPAddr))
+	time.Sleep(20 * time.Millisecond)
+	peerConn.WriteToUDP(pkt, receiverConn.LocalAddr().(*net.UDPAddr))
+	time.Sleep(20 * time.Millisecond)
+
+	fin := &Header{SessionID: sessionID, Flags: FlagFIN, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), fin, nil)
+
+	var got []byte
+	deadline := time.After(3 * time.Second)
+collect:
+	for {
+		select {
+		case chunk, ok := <-receiver.Receive():
+			if !ok {
+				break collect
+			}
+			got = append(got, chunk...)
+		case <-deadline:
+			t.Fatal("timeout waiting for output")
+		}
+	}
+
+	if len(got) != 6 || string(got) != "UNIQUE" {
+		t.Errorf("duplicate should produce single copy: got %d bytes %q", len(got), string(got))
+	}
+
+	receiver.Close()
+}
+
+func TestReceiver_ChecksumDiscard(t *testing.T) {
+	receiverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer receiverConn.Close()
+
+	peerConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer peerConn.Close()
+
+	const sessionID = uint32(103)
+	receiver := NewReceiver(receiverConn, sessionID)
+
+	acceptDone := make(chan error, 1)
+	go func() { acceptDone <- receiver.Accept() }()
+
+	time.Sleep(100 * time.Millisecond)
+
+	myISN := uint32(0x3000)
+	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), syn, nil)
+
+	synAckHdr := readAndCheckFlags(t, peerConn, FlagSYN|FlagACK)
+	serverISN := synAckHdr.SeqNum
+
+	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), ack, nil)
+
+	if err := <-acceptDone; err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+
+	seq := myISN + 1
+	pkt := makeRDTDataPacket(t, sessionID, seq, []byte("GOOD"))
+	peerConn.WriteToUDP(pkt, receiverConn.LocalAddr().(*net.UDPAddr))
+	time.Sleep(20 * time.Millisecond)
+
+	corruptPkt := makeRDTDataPacket(t, sessionID, seq+uint32(len("GOOD")), []byte("CORRUPT"))
+	if len(corruptPkt) > HeaderSize+1 {
+		corruptPkt[HeaderSize] ^= 0xFF
+	}
+	peerConn.WriteToUDP(corruptPkt, receiverConn.LocalAddr().(*net.UDPAddr))
+	time.Sleep(20 * time.Millisecond)
+
+	actualPkt := makeRDTDataPacket(t, sessionID, seq+uint32(len("GOOD")), []byte("CLEAN"))
+	peerConn.WriteToUDP(actualPkt, receiverConn.LocalAddr().(*net.UDPAddr))
+	time.Sleep(20 * time.Millisecond)
+
+	fin := &Header{SessionID: sessionID, Flags: FlagFIN, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), fin, nil)
+
+	var got []byte
+	deadline := time.After(3 * time.Second)
+collect:
+	for {
+		select {
+		case chunk, ok := <-receiver.Receive():
+			if !ok {
+				break collect
+			}
+			got = append(got, chunk...)
+		case <-deadline:
+			t.Fatal("timeout waiting for output")
+		}
+	}
+
+	want := "GOODCLEAN"
+	if string(got) != want {
+		t.Errorf("corrupt discard: got %q, want %q", string(got), want)
+	}
+
+	receiver.Close()
+}
+
+func TestReceiver_SessionIDFiltering(t *testing.T) {
+	receiverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer receiverConn.Close()
+
+	peerConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer peerConn.Close()
+
+	const sessionID = uint32(104)
+	receiver := NewReceiver(receiverConn, sessionID)
+
+	acceptDone := make(chan error, 1)
+	go func() { acceptDone <- receiver.Accept() }()
+
+	time.Sleep(100 * time.Millisecond)
+
+	wrongSyn := &Header{SessionID: 9999, SeqNum: 0, Flags: FlagSYN, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), wrongSyn, nil)
+
+	time.Sleep(300 * time.Millisecond)
+
+	myISN := uint32(0x4000)
+	correctSyn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), correctSyn, nil)
+
+	synAckHdr := readAndCheckFlags(t, peerConn, FlagSYN|FlagACK)
+	serverISN := synAckHdr.SeqNum
+
+	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), ack, nil)
+
+	select {
+	case err := <-acceptDone:
+		if err != nil {
+			t.Fatalf("Accept after wrong-SessionID filtered: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Accept timed out - wrong SessionID may have been consumed")
+	}
+
+	receiver.Close()
+}
+
+func TestReceiver_RSTHandling(t *testing.T) {
+	receiverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer receiverConn.Close()
+
+	peerConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer peerConn.Close()
+
+	const sessionID = uint32(105)
+	receiver := NewReceiver(receiverConn, sessionID)
+
+	acceptDone := make(chan error, 1)
+	go func() { acceptDone <- receiver.Accept() }()
+
+	time.Sleep(100 * time.Millisecond)
+
+	myISN := uint32(0x5000)
+	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), syn, nil)
+
+	synAckHdr := readAndCheckFlags(t, peerConn, FlagSYN|FlagACK)
+	serverISN := synAckHdr.SeqNum
+
+	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), ack, nil)
+
+	if err := <-acceptDone; err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+
+	dataSeq := myISN + 1
+	dataPkt := makeRDTDataPacket(t, sessionID, dataSeq, []byte("PRE-RST"))
+	peerConn.WriteToUDP(dataPkt, receiverConn.LocalAddr().(*net.UDPAddr))
+	time.Sleep(50 * time.Millisecond)
+
+	rst := &Header{SessionID: sessionID, Flags: FlagRST, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), rst, nil)
+
+	deadline := time.After(2 * time.Second)
+	outputClosed := false
+	for !outputClosed {
+		select {
+		case _, ok := <-receiver.Receive():
+			if !ok {
+				outputClosed = true
+			}
+		case <-deadline:
+			t.Fatal("output channel should close after RST")
+		}
+	}
+
+	receiver.Close()
+}
+
+func TestReceiver_WindowAdvertisement(t *testing.T) {
+	receiverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer receiverConn.Close()
+
+	peerConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer peerConn.Close()
+
+	const sessionID = uint32(106)
+	receiver := NewReceiver(receiverConn, sessionID)
+
+	acceptDone := make(chan error, 1)
+	go func() { acceptDone <- receiver.Accept() }()
+
+	time.Sleep(100 * time.Millisecond)
+
+	myISN := uint32(0x6000)
+	syn := &Header{SessionID: sessionID, SeqNum: myISN, Flags: FlagSYN, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), syn, nil)
+
+	peerConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 1500)
+	n, _, err := peerConn.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("read SYN+ACK: %v", err)
+	}
+	synAckHdr, _, _ := Decode(buf[:n])
+	serverISN := synAckHdr.SeqNum
+
+	ack := &Header{SessionID: sessionID, AckNum: serverISN + 1, Flags: FlagACK, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), ack, nil)
+
+	if err := <-acceptDone; err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+
+	seq := myISN + 1
+	dataPkt := makeRDTDataPacket(t, sessionID, seq, []byte("WINDOW-TEST"))
+	peerConn.WriteToUDP(dataPkt, receiverConn.LocalAddr().(*net.UDPAddr))
+	time.Sleep(50 * time.Millisecond)
+
+	peerConn.SetReadDeadline(time.Now().Add(1 * time.Second))
+	buf2 := make([]byte, 1500)
+	n2, _, err := peerConn.ReadFromUDP(buf2)
+	if err != nil {
+		t.Fatalf("read ACK for window: %v", err)
+	}
+	ackHdr, _, _ := Decode(buf2[:n2])
+
+	if ackHdr.Window == 0 {
+		t.Error("window should not be 0 with empty buffer")
+	}
+	if ackHdr.Window > 65535 {
+		t.Errorf("window %d exceeds max", ackHdr.Window)
+	}
+
+	fin := &Header{SessionID: sessionID, Flags: FlagFIN, Window: 65535}
+	sendPacket(t, peerConn, receiverConn.LocalAddr().(*net.UDPAddr), fin, nil)
+
+	drainChannel(t, receiver.Receive())
+	receiver.Close()
+}
+
+func TestReceiver_DoubleCloseSafety(t *testing.T) {
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer conn.Close()
+
+	r := NewReceiver(conn, 1)
+
+	err1 := r.Close()
+	if err1 != nil {
+		t.Errorf("first Close returned error: %v", err1)
+	}
+
+	err2 := r.Close()
+	if err2 != nil {
+		t.Errorf("second Close returned error: %v", err2)
+	}
+}
+
+func drainChannel(t *testing.T, ch <-chan []byte) {
+	t.Helper()
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+		default:
+			return
+		}
+	}
+}
+
+func sendPacket(t *testing.T, conn *net.UDPConn, addr *net.UDPAddr, hdr *Header, payload []byte) {
+	t.Helper()
+	encoded, _ := hdr.Encode(payload)
+	cs := ComputeChecksum(encoded)
+	binary.BigEndian.PutUint32(encoded[17:21], cs)
+	if _, err := conn.WriteToUDP(encoded, addr); err != nil {
+		t.Fatalf("sendPacket: %v", err)
+	}
+}
+
+func readPacket(t *testing.T, conn *net.UDPConn) *Header {
+	t.Helper()
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 1500)
+	n, _, err := conn.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("readPacket: %v", err)
+	}
+	hdr, _, err := Decode(buf[:n])
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return hdr
+}
+
+func readAndCheckFlags(t *testing.T, conn *net.UDPConn, expectedFlags uint8) *Header {
+	t.Helper()
+	hdr := readPacket(t, conn)
+	if hdr.Flags != expectedFlags {
+		t.Errorf("expected flags=0x%02x, got 0x%02x", expectedFlags, hdr.Flags)
+	}
+	return hdr
+}
+
+func readISN(t *testing.T, conn *net.UDPConn) uint32 {
+	t.Helper()
+	hdr := readPacket(t, conn)
+	return hdr.SeqNum
+}

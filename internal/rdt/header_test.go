@@ -144,3 +144,130 @@ func TestFlags_Const(t *testing.T) {
 		t.Errorf("FlagDATA = %02x, want 0x10", FlagDATA)
 	}
 }
+
+func TestHeaderEncodeDecode_AllFlagCombos(t *testing.T) {
+	flagCombos := []uint8{
+		FlagSYN,
+		FlagSYN | FlagACK,
+		FlagACK,
+		FlagDATA,
+		FlagDATA | FlagACK,
+		FlagFIN,
+		FlagFIN | FlagACK,
+		FlagRST,
+	}
+	payload := []byte("flag combo test data")
+	for _, flags := range flagCombos {
+		h := &Header{
+			SessionID: 100,
+			SeqNum:    0,
+			AckNum:    200,
+			Flags:     flags,
+			Window:    64000,
+		}
+		encoded, err := h.Encode(payload)
+		if err != nil {
+			t.Fatalf("Encode flags=0x%02x: %v", flags, err)
+		}
+		decoded, _, err := Decode(encoded)
+		if err != nil {
+			t.Fatalf("Decode flags=0x%02x: %v", flags, err)
+		}
+		if decoded.Flags != flags {
+			t.Errorf("Flags mismatch: got 0x%02x, want 0x%02x", decoded.Flags, flags)
+		}
+	}
+}
+
+func TestHeaderDecode_ReservedBitsIgnored(t *testing.T) {
+	h := &Header{SessionID: 1, Flags: FlagSYN | 0xE0, Window: 65535}
+	encoded, _ := h.Encode(nil)
+	decoded, _, err := Decode(encoded)
+	if err != nil {
+		t.Fatalf("Decode with reserved bits: %v", err)
+	}
+	if decoded.Flags&FlagSYN != FlagSYN {
+		t.Error("SYN flag should survive reserved bits")
+	}
+}
+
+func TestHeaderDecode_AllZeros(t *testing.T) {
+	h := &Header{SessionID: 0, SeqNum: 0, AckNum: 0, Flags: 0, PayloadLen: 0, Window: 0}
+	encoded, _ := h.Encode(nil)
+	decoded, _, err := Decode(encoded)
+	if err != nil {
+		t.Fatalf("Decode all-zeros: %v", err)
+	}
+	if decoded.SessionID != 0 || decoded.Flags != 0 {
+		t.Error("all-zeros header should decode correctly")
+	}
+}
+
+func TestHeaderEncodeDecode_MaxValues(t *testing.T) {
+	payload := []byte("max vals")
+	h := &Header{
+		SessionID:  0xFFFFFFFF,
+		SeqNum:     0xFFFFFFFF,
+		AckNum:     0xFFFFFFFF,
+		Flags:      FlagDATA | FlagACK | FlagSYN | FlagFIN | FlagRST,
+		PayloadLen: uint16(len(payload)),
+		Window:     0xFFFF,
+		Checksum:   0xFFFFFFFF,
+	}
+	encoded, _ := h.Encode(payload)
+	decoded, decPayload, err := Decode(encoded)
+	if err != nil {
+		t.Fatalf("Decode max values: %v", err)
+	}
+	if decoded.SessionID != 0xFFFFFFFF {
+		t.Errorf("SessionID: got 0x%08X", decoded.SessionID)
+	}
+	if decoded.SeqNum != 0xFFFFFFFF {
+		t.Errorf("SeqNum: got 0x%08X", decoded.SeqNum)
+	}
+	if decoded.AckNum != 0xFFFFFFFF {
+		t.Errorf("AckNum: got 0x%08X", decoded.AckNum)
+	}
+	if decoded.Window != 0xFFFF {
+		t.Errorf("Window: got 0x%04X", decoded.Window)
+	}
+	if string(decPayload) != string(payload) {
+		t.Errorf("payload mismatch: %q vs %q", decPayload, payload)
+	}
+}
+
+func TestHeaderEncode_PayloadLenAutoSet(t *testing.T) {
+	h := &Header{}
+	payload := []byte("auto payload length")
+	encoded, err := h.Encode(payload)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	decoded, _, err := Decode(encoded)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if decoded.PayloadLen != uint16(len(payload)) {
+		t.Errorf("PayloadLen auto-set: got %d, want %d", decoded.PayloadLen, len(payload))
+	}
+}
+
+func TestHeaderDecode_ExactFit(t *testing.T) {
+	h := &Header{SessionID: 77, SeqNum: 100, Flags: FlagDATA}
+	payload := []byte("exact")
+	encoded, _ := h.Encode(payload)
+
+	for i := 0; i < len(encoded); i++ {
+		short := encoded[:i]
+		_, _, err := Decode(short)
+		if i < HeaderSize {
+			if err == nil {
+				t.Errorf("expected error for %d-byte buffer (< HeaderSize)", i)
+			}
+		} else if i < len(encoded) {
+			if err == nil {
+				t.Errorf("expected error for %d-byte buffer (payload cut short)", i)
+			}
+		}
+	}
+}

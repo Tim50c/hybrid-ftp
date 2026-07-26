@@ -3,9 +3,19 @@ package rdt
 import (
 	"encoding/binary"
 	"fmt"
+	"net"
+	"time"
 )
 
 const HeaderSize = 21
+
+type UDPConn interface {
+	ReadFromUDP(b []byte) (int, *net.UDPAddr, error)
+	WriteToUDP(b []byte, addr *net.UDPAddr) (int, error)
+	Close() error
+	LocalAddr() net.Addr
+	SetReadDeadline(t time.Time) error
+}
 
 const (
 	FlagSYN  uint8 = 0x01
