@@ -253,6 +253,9 @@ func RenameTo(root string, sess *session.Session, newname string) error {
 	if err != nil {
 		return fmt.Errorf("rename to: %w", err)
 	}
+	if _, err := os.Stat(fullPath); err == nil {
+		return fmt.Errorf("destination already exists: %s", newname)
+	}
 	if err := os.Rename(sess.RnfrPath, fullPath); err != nil {
 		return fmt.Errorf("rename to: %w", err)
 	}

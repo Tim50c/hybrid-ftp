@@ -553,6 +553,7 @@ func TestE2E_RNFR_RNTO(t *testing.T) {
 	fc.sendAndRead(t, "PASS admin")
 
 	os.WriteFile(filepath.Join(rootDir, "original.txt"), []byte("data"), 0644)
+	os.Remove(filepath.Join(rootDir, "renamed.txt"))
 
 	if r := fc.sendAndRead(t, "RNFR original.txt"); !strings.HasPrefix(r, "350") {
 		t.Fatalf("RNFR: expected 350, got %s", r)

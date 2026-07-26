@@ -1645,6 +1645,7 @@ func TestRename_File(t *testing.T) {
 	defer cleanup()
 
 	os.WriteFile(filepath.Join(rootDir, "original.txt"), []byte("data"), 0644)
+	os.Remove(filepath.Join(rootDir, "renamed.txt")) // cleanup from prior runs
 
 	conn, _ := net.Dial("tcp", ":"+ctrlPort)
 	defer conn.Close()
@@ -1667,6 +1668,43 @@ func TestRename_File(t *testing.T) {
 	r = fc.sendAndRead(t, "RETR original.txt")
 	if !strings.HasPrefix(r, "550") {
 		t.Errorf("RETR old name: expected 550, got %s", r)
+	}
+
+	fc.sendAndRead(t, "QUIT")
+}
+
+func TestRename_FileToExisting(t *testing.T) {
+	_, cleanup := startServer(t)
+	defer cleanup()
+
+	os.WriteFile(filepath.Join(rootDir, "source.txt"), []byte("source data"), 0644)
+	os.WriteFile(filepath.Join(rootDir, "target.txt"), []byte("target data"), 0644)
+
+	conn, _ := net.Dial("tcp", ":"+ctrlPort)
+	defer conn.Close()
+	fc := newFTPConn(t, conn)
+
+	fc.sendAndRead(t, "")
+	fc.sendAndRead(t, "USER admin")
+	fc.sendAndRead(t, "PASS admin")
+
+	r := fc.sendAndRead(t, "RNFR source.txt")
+	if !strings.HasPrefix(r, "350") {
+		t.Errorf("RNFR: expected 350, got %s", r)
+	}
+
+	r = fc.sendAndRead(t, "RNTO target.txt")
+	if !strings.HasPrefix(r, "550") {
+		t.Errorf("RNTO to existing: expected 550, got %s", r)
+	}
+
+	sourceData, _ := os.ReadFile(filepath.Join(rootDir, "source.txt"))
+	if string(sourceData) != "source data" {
+		t.Error("source file should still exist unchanged")
+	}
+	targetData, _ := os.ReadFile(filepath.Join(rootDir, "target.txt"))
+	if string(targetData) != "target data" {
+		t.Error("target file should be unchanged")
 	}
 
 	fc.sendAndRead(t, "QUIT")
