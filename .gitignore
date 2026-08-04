@@ -18,3 +18,7 @@ opencode.json
 
 # editor config (personal)
 .vscode/
+
+# report files
+report/
+genai/
