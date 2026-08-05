@@ -56,9 +56,8 @@ func (tm *TimerManager) Start(seq uint32) {
 	tm.timers[seq] = time.AfterFunc(delay, func() {
 		tm.mu.Lock()
 		tm.backoff[seq]++
-		cb := tm.onExpire
 		tm.mu.Unlock()
-		cb(seq)
+		tm.onExpire(seq)
 	})
 }
 
