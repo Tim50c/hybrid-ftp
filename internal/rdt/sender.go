@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
-	"math/rand"
 	"net"
 	"sync"
 	"time"
@@ -14,7 +13,6 @@ type senderState int
 
 const (
 	sendClosed senderState = iota
-	sendSynSent
 	sendEstablished
 	sendFinSent
 )
@@ -31,7 +29,6 @@ type packetRecord struct {
 
 type Sender struct {
 	conn       UDPConn
-	sessionID  uint32
 	remoteAddr *net.UDPAddr
 	mu         sync.Mutex
 	state      senderState
@@ -43,140 +40,64 @@ type Sender struct {
 	timers     *TimerManager
 	bbr        *BBR
 	outbox     chan []byte
-	ackCh      chan ackEvent
 	done       chan struct{}
 	errCh      chan error
 	closeOnce  sync.Once
 	activeSend bool
+	recvReady  chan struct{}
 }
 
-type ackEvent struct {
-	ackNum uint32
-	window uint16
-}
-
-func NewSender(conn UDPConn, sessionID uint32) *Sender {
+func NewSender(conn UDPConn) *Sender {
 	s := &Sender{
 		conn:       conn,
-		sessionID:  sessionID,
 		state:      sendClosed,
 		recvWindow: 65535,
 		inflight:   make(map[uint32]*packetRecord),
 		bbr:        NewBBR(),
 		outbox:     make(chan []byte, 100),
-		ackCh:      make(chan ackEvent, 100),
 		done:       make(chan struct{}),
 		errCh:      make(chan error, 1),
+		recvReady:  make(chan struct{}),
 	}
 	s.timers = NewTimerManager(500*time.Millisecond, s.onTimeout)
 	return s
 }
 
-func (s *Sender) Connect(addr *net.UDPAddr) error {
+func (s *Sender) Start(addr *net.UDPAddr) error {
 	s.mu.Lock()
 	s.remoteAddr = addr
+	s.state = sendEstablished
 	s.mu.Unlock()
 
-	myISN := uint32(rand.Int31())
-	if err := s.sendControl(myISN, 0, FlagSYN); err != nil {
-		return fmt.Errorf("connect syn: %w", err)
+	h := &Header{
+		AckNum: 0,
+		Flags:  FlagACK,
+		Window: 65535,
 	}
+	encoded, _ := h.Encode(nil)
+	checksum := ComputeChecksum(encoded)
+	binary.BigEndian.PutUint32(encoded[13:17], checksum)
+	s.conn.WriteToUDP(encoded, s.remoteAddr)
 
-	s.mu.Lock()
-	s.state = sendSynSent
-	s.mu.Unlock()
-
-	for {
-		buf := make([]byte, 1500)
-		n, _, err := s.conn.ReadFromUDP(buf)
-		if err != nil {
-			return fmt.Errorf("connect read: %w", err)
-		}
-		hdr, _, err := Decode(buf[:n])
-		if err != nil {
-			continue
-		}
-		if !VerifyChecksum(buf[:n]) {
-			continue
-		}
-		if hdr.SessionID != s.sessionID || hdr.Flags&0x1F != (FlagSYN|FlagACK) {
-			continue
-		}
-
-		s.mu.Lock()
-		s.peerScale = WindowScale(hdr.Flags)
-		s.recvWindow = hdr.EffectiveWindow()
-		s.sendBase = myISN + 1
-		s.nextSeqNum = myISN + 1
-		if err := s.sendControl(0, hdr.SeqNum+1, FlagACK); err != nil {
-			s.mu.Unlock()
-			return fmt.Errorf("connect ack: %w", err)
-		}
-		s.state = sendEstablished
-		s.mu.Unlock()
-
-		go s.sendLoop()
-		go s.recvLoop()
-		return nil
-	}
+	go s.sendLoop()
+	go s.recvLoop()
+	return nil
 }
 
 func (s *Sender) Accept() error {
-	s.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-	for {
-		buf := make([]byte, 1500)
-		n, addr, err := s.conn.ReadFromUDP(buf)
-		if err != nil {
-			return fmt.Errorf("accept read: %w", err)
-		}
+	s.mu.Lock()
+	s.state = sendEstablished
+	recvReady := s.recvReady
+	s.mu.Unlock()
 
-		hdr, _, err := Decode(buf[:n])
-		if err != nil {
-			continue
-		}
-		if !VerifyChecksum(buf[:n]) {
-			continue
-		}
-		if hdr.SessionID != s.sessionID || hdr.Flags&0x1F != FlagSYN {
-			continue
-		}
+	go s.sendLoop()
+	go s.recvLoop()
 
-		s.mu.Lock()
-		s.remoteAddr = addr
-		s.peerScale = WindowScale(hdr.Flags)
-		s.recvWindow = hdr.EffectiveWindow()
-		myISN := uint32(rand.Int31())
-		s.sendBase = myISN + 1
-		s.nextSeqNum = myISN + 1
-		s.sendControl(myISN, hdr.SeqNum+1, FlagSYN|FlagACK)
-		s.mu.Unlock()
-
-		for {
-			buf := make([]byte, 1500)
-			n, _, err := s.conn.ReadFromUDP(buf)
-			if err != nil {
-				return fmt.Errorf("accept third ack: %w", err)
-			}
-			hdr, _, err := Decode(buf[:n])
-			if err != nil {
-				continue
-			}
-			if !VerifyChecksum(buf[:n]) {
-				continue
-			}
-			if hdr.SessionID != s.sessionID || hdr.Flags&0x1F != FlagACK {
-				continue
-			}
-			break
-		}
-
-		s.mu.Lock()
-		s.state = sendEstablished
-		s.mu.Unlock()
-
-		go s.sendLoop()
-		go s.recvLoop()
+	select {
+	case <-recvReady:
 		return nil
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("accept timed out waiting for peer")
 	}
 }
 
@@ -228,7 +149,7 @@ func (s *Sender) Close() error {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	if err := s.sendControl(0, 0, FlagFIN); err != nil {
+	if err := s.sendControl(FlagFIN); err != nil {
 		return fmt.Errorf("close fin: %w", err)
 	}
 
@@ -239,21 +160,20 @@ func (s *Sender) Close() error {
 	return nil
 }
 
-func (s *Sender) sendControl(seqNum, ackNum uint32, flags uint8) error {
+func (s *Sender) sendControl(flags uint8) error {
 	h := &Header{
-		SessionID:  s.sessionID,
-		SeqNum:     seqNum,
-		AckNum:     ackNum,
+		SeqNum:     0,
+		AckNum:     0,
 		Flags:      flags,
 		PayloadLen: 0,
-		RawWindow:  65535,
+		Window:     65535,
 	}
 	encoded, err := h.Encode(nil)
 	if err != nil {
 		return fmt.Errorf("encode control: %w", err)
 	}
 	checksum := ComputeChecksum(encoded)
-	binary.BigEndian.PutUint32(encoded[17:21], checksum)
+	binary.BigEndian.PutUint32(encoded[13:17], checksum)
 	_, err = s.conn.WriteToUDP(encoded, s.remoteAddr)
 	if err != nil {
 		return fmt.Errorf("send control: %w", err)
@@ -262,7 +182,7 @@ func (s *Sender) sendControl(seqNum, ackNum uint32, flags uint8) error {
 }
 
 func (s *Sender) sendLoop() {
-	log.Printf("[RDT] sender loop started, session=%d", s.sessionID)
+	log.Printf("[RDT] sender loop started")
 	for {
 		select {
 		case <-s.done:
@@ -295,7 +215,6 @@ func (s *Sender) sendLoop() {
 			for !s.bbr.CanSend(chunkLen, s.recvWindow) {
 				s.mu.Unlock()
 				select {
-				case <-s.ackCh:
 				case <-s.done:
 					return
 				case <-time.After(10 * time.Millisecond):
@@ -309,16 +228,15 @@ func (s *Sender) sendLoop() {
 			s.nextSeqNum += chunkLen
 
 			h := &Header{
-				SessionID:  s.sessionID,
 				SeqNum:     seq,
 				AckNum:     0,
 				Flags:      FlagDATA,
 				PayloadLen: uint16(chunkLen),
-				RawWindow:  65535,
+				Window:     65535,
 			}
 			encoded, _ := h.Encode(chunk)
 			checksum := ComputeChecksum(encoded)
-			binary.BigEndian.PutUint32(encoded[17:21], checksum)
+			binary.BigEndian.PutUint32(encoded[13:17], checksum)
 
 			if _, err := s.conn.WriteToUDP(encoded, s.remoteAddr); err != nil {
 				log.Printf("[RDT] sender write error: %v", err)
@@ -358,7 +276,7 @@ func (s *Sender) sendLoop() {
 }
 
 func (s *Sender) recvLoop() {
-	log.Printf("[RDT] sender recv loop started, session=%d", s.sessionID)
+	log.Printf("[RDT] sender recv loop started")
 	for {
 		select {
 		case <-s.done:
@@ -368,7 +286,7 @@ func (s *Sender) recvLoop() {
 
 		s.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		buf := make([]byte, 1500)
-		n, _, err := s.conn.ReadFromUDP(buf)
+		n, addr, err := s.conn.ReadFromUDP(buf)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue
@@ -386,20 +304,17 @@ func (s *Sender) recvLoop() {
 			continue
 		}
 
-		if hdr.SessionID != s.sessionID {
-			continue
-		}
-
 		s.mu.Lock()
 
-		switch {
-		case hdr.Flags&FlagRST != 0:
-			log.Printf("[RDT] sender got RST")
-			s.state = sendClosed
-			s.mu.Unlock()
-			s.closeOnce.Do(func() { close(s.done) })
-			return
+		if s.remoteAddr == nil {
+			s.remoteAddr = addr
+			if s.recvReady != nil {
+				close(s.recvReady)
+				s.recvReady = nil
+			}
+		}
 
+		switch {
 		case hdr.Flags&(FlagFIN|FlagACK) == FlagFIN|FlagACK:
 			s.state = sendClosed
 			s.mu.Unlock()
@@ -459,7 +374,7 @@ func (s *Sender) onTimeout(seq uint32) {
 	if rec.retransCount > maxRetransmits {
 		s.bbr.OnLoss(rec.length)
 		log.Printf("[RDT] max retransmits exceeded for seq=%d", seq)
-		s.sendControl(0, 0, FlagRST)
+		s.sendControl(FlagFIN)
 		s.state = sendClosed
 		go func() { s.errCh <- fmt.Errorf("max retransmits for seq %d", seq) }()
 		s.closeOnce.Do(func() { close(s.done) })
