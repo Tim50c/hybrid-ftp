@@ -23,6 +23,7 @@ type Session struct {
 	Ctx             context.Context
 	Cancel          context.CancelFunc
 	TransferReplied bool
+	TransferMu      sync.Mutex
 }
 
 type Manager struct {

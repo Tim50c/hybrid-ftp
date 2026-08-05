@@ -124,27 +124,21 @@ func main() {
 			}
 
 		case tcpctrl.CmdLIST:
-			ensurePASV(conn)
 			handleList(conn, strings.TrimSpace(line[4:]))
 
 		case tcpctrl.CmdRETR:
-			ensurePASV(conn)
 			handleRETR(conn, strings.TrimSpace(line[4:]))
 
 		case tcpctrl.CmdSTOR:
-			ensurePASV(conn)
 			handleSTOR(conn, strings.TrimSpace(line[4:]))
 
 		case tcpctrl.CmdNLST:
-			ensurePASV(conn)
 			handleNLST(conn, strings.TrimSpace(line[4:]))
 
 		case tcpctrl.CmdSTOU:
-			ensurePASV(conn)
 			handleSTOU(conn, strings.TrimSpace(line[4:]))
 
 		case tcpctrl.CmdAPPE:
-			ensurePASV(conn)
 			handleAPPE(conn, strings.TrimSpace(line[4:]))
 
 		case tcpctrl.CmdHASH:
@@ -214,15 +208,6 @@ func parsePASV(reply string) (string, int, error) {
 func setupPASVConnection(host string, port int) {
 	currentPASVHost = host
 	currentPASVPort = port
-}
-
-func ensurePASV(conn net.Conn) {
-	if connDataMode == modePORT || connDataMode == modePASV {
-		return
-	}
-	if connDataMode == modeNone {
-		return
-	}
 }
 
 func prepareDataTransfer() (*net.UDPConn, func(), error) {
@@ -399,13 +384,12 @@ func handleList(conn net.Conn, path string) {
 	}
 	defer cleanup()
 
-	sessionID := uint32(1)
-	r := rdt.NewReceiver(udpConn, sessionID)
+	r := rdt.NewReceiver(udpConn)
 
 	switch connDataMode {
 	case modePASV:
 		udpAddr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
-		if err := r.Connect(udpAddr); err != nil {
+		if err := r.Start(udpAddr); err != nil {
 			fmt.Printf("RDT connect error: %v\n", err)
 			return
 		}
@@ -477,14 +461,13 @@ func handleRETR(conn net.Conn, filename string) {
 	}
 	defer cleanup()
 
-	sessionID := uint32(1)
-	receiver := rdt.NewReceiver(udpConn, sessionID)
+	receiver := rdt.NewReceiver(udpConn)
 
 	switch connDataMode {
 	case modePASV:
 		udpAddr, _ := net.ResolveUDPAddr("udp",
 			fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
-		if err := receiver.Connect(udpAddr); err != nil {
+		if err := receiver.Start(udpAddr); err != nil {
 			fmt.Printf("RDT connect: %v\n", err)
 			return
 		}
@@ -583,14 +566,13 @@ func handleSTOR(conn net.Conn, filename string) {
 		return
 	}
 
-	sessionID := uint32(1)
-	sender := rdt.NewSender(udpConn, sessionID)
+	sender := rdt.NewSender(udpConn)
 
 	switch connDataMode {
 	case modePASV:
 		udpAddr, _ := net.ResolveUDPAddr("udp",
 			fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
-		if err := sender.Connect(udpAddr); err != nil {
+		if err := sender.Start(udpAddr); err != nil {
 			fmt.Printf("RDT connect: %v\n", err)
 			cleanup()
 			localFile.Close()
@@ -675,13 +657,12 @@ func handleNLST(conn net.Conn, path string) {
 		return
 	}
 
-	sessionID := uint32(1)
-	r := rdt.NewReceiver(udpConn, sessionID)
+	r := rdt.NewReceiver(udpConn)
 
 	switch connDataMode {
 	case modePASV:
 		udpAddr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
-		if err := r.Connect(udpAddr); err != nil {
+		if err := r.Start(udpAddr); err != nil {
 			fmt.Printf("RDT connect error: %v\n", err)
 			cleanup()
 			return
@@ -766,14 +747,13 @@ func handleSTOU(conn net.Conn, filename string) {
 		return
 	}
 
-	sessionID := uint32(1)
-	sender := rdt.NewSender(udpConn, sessionID)
+	sender := rdt.NewSender(udpConn)
 
 	switch connDataMode {
 	case modePASV:
 		udpAddr, _ := net.ResolveUDPAddr("udp",
 			fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
-		if err := sender.Connect(udpAddr); err != nil {
+		if err := sender.Start(udpAddr); err != nil {
 			fmt.Printf("RDT connect: %v\n", err)
 			cleanup()
 			localFile.Close()
@@ -878,14 +858,13 @@ func handleAPPE(conn net.Conn, filename string) {
 		return
 	}
 
-	sessionID := uint32(1)
-	sender := rdt.NewSender(udpConn, sessionID)
+	sender := rdt.NewSender(udpConn)
 
 	switch connDataMode {
 	case modePASV:
 		udpAddr, _ := net.ResolveUDPAddr("udp",
 			fmt.Sprintf("%s:%d", currentPASVHost, currentPASVPort))
-		if err := sender.Connect(udpAddr); err != nil {
+		if err := sender.Start(udpAddr); err != nil {
 			fmt.Printf("RDT connect: %v\n", err)
 			cleanup()
 			localFile.Close()
