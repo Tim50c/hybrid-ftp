@@ -1353,8 +1353,8 @@ func TestSTOR_SmallFile(t *testing.T) {
 	udpConn, _ := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
 	defer udpConn.Close()
 
-	sender := rdt.NewSender(udpConn, 1)
-	sender.Connect(udpAddr)
+	sender := rdt.NewSender(udpConn)
+	sender.Start(udpAddr)
 	sender.Send(payload)
 	time.Sleep(200 * time.Millisecond)
 	sender.Close()
@@ -1427,8 +1427,8 @@ func TestSTOU_UniqueName(t *testing.T) {
 	udpConn, _ := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
 	defer udpConn.Close()
 
-	sender := rdt.NewSender(udpConn, 1)
-	sender.Connect(udpAddr)
+	sender := rdt.NewSender(udpConn)
+	sender.Start(udpAddr)
 	sender.Send([]byte("unique content"))
 	time.Sleep(200 * time.Millisecond)
 	sender.Close()
@@ -1497,8 +1497,8 @@ func TestAPPE_Append(t *testing.T) {
 	udpConn, _ := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
 	defer udpConn.Close()
 
-	sender := rdt.NewSender(udpConn, 1)
-	sender.Connect(udpAddr)
+	sender := rdt.NewSender(udpConn)
+	sender.Start(udpAddr)
 	sender.Send([]byte(" world"))
 	time.Sleep(200 * time.Millisecond)
 	sender.Close()
