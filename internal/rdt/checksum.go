@@ -13,7 +13,7 @@ func ComputeChecksum(data []byte) uint32 {
 	}
 	packet := make([]byte, len(data))
 	copy(packet, data)
-	binary.BigEndian.PutUint32(packet[17:21], 0)
+	binary.BigEndian.PutUint32(packet[13:17], 0)
 	return crc32.Checksum(packet, ieeeTable)
 }
 
@@ -22,6 +22,6 @@ func VerifyChecksum(data []byte) bool {
 		return false
 	}
 	computed := ComputeChecksum(data)
-	stored := binary.BigEndian.Uint32(data[17:21])
+	stored := binary.BigEndian.Uint32(data[13:17])
 	return computed == stored
 }
