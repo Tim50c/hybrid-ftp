@@ -35,7 +35,6 @@ type Sender struct {
 	sendBase   uint32
 	nextSeqNum uint32
 	recvWindow uint32
-	peerScale  uint8
 	inflight   map[uint32]*packetRecord
 	timers     *TimerManager
 	bbr        *BBR
@@ -74,7 +73,10 @@ func (s *Sender) Start(addr *net.UDPAddr) error {
 		Flags:  FlagACK,
 		Window: 65535,
 	}
-	encoded, _ := h.Encode(nil)
+	encoded, err := h.Encode(nil)
+	if err != nil {
+		return fmt.Errorf("encode ready ack: %w", err)
+	}
 	checksum := ComputeChecksum(encoded)
 	binary.BigEndian.PutUint32(encoded[13:17], checksum)
 	s.conn.WriteToUDP(encoded, s.remoteAddr)
