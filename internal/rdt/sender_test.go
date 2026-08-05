@@ -3,158 +3,15 @@ package rdt
 import (
 	"encoding/binary"
 	"net"
-	"sync"
 	"testing"
 	"time"
 )
 
-func makePeerConn(t *testing.T) (*net.UDPConn, *net.UDPAddr) {
+func drainInitialAck(t *testing.T, conn *net.UDPConn) {
 	t.Helper()
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
-	if err != nil {
-		t.Fatalf("listen peer: %v", err)
-	}
-	return conn, conn.LocalAddr().(*net.UDPAddr)
-}
-
-func completeSenderHandshake(t *testing.T, sender *Sender, peerConn *net.UDPConn, senderConn *net.UDPConn) {
-	t.Helper()
-
-	peerAddr := peerConn.LocalAddr().(*net.UDPAddr)
-	senderConnAddr := senderConn.LocalAddr().(*net.UDPAddr)
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- sender.Connect(peerAddr)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	buf := make([]byte, 1500)
-	peerConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	n, _, err := peerConn.ReadFromUDP(buf)
-	if err != nil {
-		t.Fatalf("peer read SYN: %v", err)
-	}
-	synHdr, _, err := Decode(buf[:n])
-	if err != nil {
-		t.Fatalf("decode SYN: %v", err)
-	}
-	if synHdr.Flags&FlagSYN == 0 {
-		t.Fatal("expected SYN from sender")
-	}
-
-	myISN := uint32(0xBEEF)
-	synAck := &Header{
-		SessionID: sender.sessionID,
-		SeqNum:    myISN,
-		AckNum:    synHdr.SeqNum + 1,
-		Flags:     FlagSYN | FlagACK,
-		RawWindow: 65535,
-	}
-	synAckBytes, _ := synAck.Encode(nil)
-	cs := ComputeChecksum(synAckBytes)
-	binary.BigEndian.PutUint32(synAckBytes[17:21], cs)
-	peerConn.WriteToUDP(synAckBytes, senderConnAddr)
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("Connect: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("sender Connect timed out")
-	}
-
-	peerConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	ackBuf := make([]byte, 1500)
-	n, _, err = peerConn.ReadFromUDP(ackBuf)
-	if err == nil {
-		ackHdr, _, _ := Decode(ackBuf[:n])
-		if ackHdr.Flags != FlagACK || ackHdr.AckNum != myISN+1 {
-			t.Logf("third ACK: flags=0x%02x ack=%d", ackHdr.Flags, ackHdr.AckNum)
-		}
-	}
-}
-
-func TestSender_ConnectThreeWayHandshake(t *testing.T) {
-	senderConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer senderConn.Close()
-
-	peerConn, _ := makePeerConn(t)
-	defer peerConn.Close()
-
-	sender := NewSender(senderConn, 42)
-	completeSenderHandshake(t, sender, peerConn, senderConn)
-
-	sender.mu.Lock()
-	state := sender.state
-	sender.mu.Unlock()
-
-	if state != sendEstablished {
-		t.Errorf("expected established, got state=%d", state)
-	}
-}
-
-func TestSender_AcceptThreeWayHandshake(t *testing.T) {
-	senderConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer senderConn.Close()
-
-	peerConn, _ := makePeerConn(t)
-	defer peerConn.Close()
-
-	sender := NewSender(senderConn, 43)
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- sender.Accept() }()
-
-	time.Sleep(100 * time.Millisecond)
-
-	syn := &Header{SessionID: 43, SeqNum: 0xAAAA, Flags: FlagSYN, RawWindow: 65535}
-	synBytes, _ := syn.Encode(nil)
-	cs := ComputeChecksum(synBytes)
-	binary.BigEndian.PutUint32(synBytes[17:21], cs)
-	peerConn.WriteToUDP(synBytes, senderConn.LocalAddr().(*net.UDPAddr))
-
-	buf := make([]byte, 1500)
-	peerConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	n, _, err := peerConn.ReadFromUDP(buf)
-	if err != nil {
-		t.Fatalf("read SYN+ACK: %v", err)
-	}
-	synAckHdr, _, _ := Decode(buf[:n])
-	if synAckHdr.Flags&(FlagSYN|FlagACK) != FlagSYN|FlagACK {
-		t.Fatalf("expected SYN+ACK, got flags=0x%02x", synAckHdr.Flags)
-	}
-
-	ack := &Header{SessionID: 43, AckNum: synAckHdr.SeqNum + 1, Flags: FlagACK, RawWindow: 65535}
-	ackBytes, _ := ack.Encode(nil)
-	cs = ComputeChecksum(ackBytes)
-	binary.BigEndian.PutUint32(ackBytes[17:21], cs)
-	peerConn.WriteToUDP(ackBytes, senderConn.LocalAddr().(*net.UDPAddr))
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("Accept: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Accept timed out")
-	}
-
-	sender.mu.Lock()
-	state := sender.state
-	sender.mu.Unlock()
-
-	if state != sendEstablished {
-		t.Errorf("expected established, got state=%d", state)
-	}
+	conn.ReadFromUDP(buf)
 }
 
 func TestSender_SendAndProcessAck(t *testing.T) {
@@ -164,11 +21,15 @@ func TestSender_SendAndProcessAck(t *testing.T) {
 	}
 	defer senderConn.Close()
 
-	peerConn, _ := makePeerConn(t)
+	peerConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen peer: %v", err)
+	}
 	defer peerConn.Close()
 
-	sender := NewSender(senderConn, 44)
-	completeSenderHandshake(t, sender, peerConn, senderConn)
+	sender := NewSender(senderConn)
+	sender.Start(peerConn.LocalAddr().(*net.UDPAddr))
+	drainInitialAck(t, peerConn)
 
 	sender.Send([]byte("Hello from sender test!"))
 
@@ -195,14 +56,13 @@ func TestSender_SendAndProcessAck(t *testing.T) {
 	}
 
 	ack := &Header{
-		SessionID: 44,
-		AckNum:    dataHdr.SeqNum + uint32(len(payload)),
-		Flags:     FlagACK,
-		RawWindow: 65535,
+		AckNum: dataHdr.SeqNum + uint32(len(payload)),
+		Flags:  FlagACK,
+		Window: 65535,
 	}
 	ackBytes, _ := ack.Encode(nil)
 	cs := ComputeChecksum(ackBytes)
-	binary.BigEndian.PutUint32(ackBytes[17:21], cs)
+	binary.BigEndian.PutUint32(ackBytes[13:17], cs)
 	peerConn.WriteToUDP(ackBytes, senderConn.LocalAddr().(*net.UDPAddr))
 
 	time.Sleep(100 * time.Millisecond)
@@ -228,11 +88,15 @@ func TestSender_RetransmitOnTimeout(t *testing.T) {
 	}
 	defer senderConn.Close()
 
-	peerConn, _ := makePeerConn(t)
+	peerConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen peer: %v", err)
+	}
 	defer peerConn.Close()
 
-	sender := NewSender(senderConn, 45)
-	completeSenderHandshake(t, sender, peerConn, senderConn)
+	sender := NewSender(senderConn)
+	sender.Start(peerConn.LocalAddr().(*net.UDPAddr))
+	drainInitialAck(t, peerConn)
 
 	sender.Send([]byte("packet for retransmit"))
 
@@ -276,11 +140,15 @@ func TestSender_CumulativeAck(t *testing.T) {
 	}
 	defer senderConn.Close()
 
-	peerConn, _ := makePeerConn(t)
+	peerConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen peer: %v", err)
+	}
 	defer peerConn.Close()
 
-	sender := NewSender(senderConn, 46)
-	completeSenderHandshake(t, sender, peerConn, senderConn)
+	sender := NewSender(senderConn)
+	sender.Start(peerConn.LocalAddr().(*net.UDPAddr))
+	drainInitialAck(t, peerConn)
 
 	sender.Send([]byte("AAAA BBBB CCCC"))
 
@@ -312,14 +180,13 @@ func TestSender_CumulativeAck(t *testing.T) {
 	cumulativeAck := lastPkt.seq + lastPkt.len
 
 	ack := &Header{
-		SessionID: 46,
-		AckNum:    cumulativeAck,
-		Flags:     FlagACK,
-		RawWindow: 65535,
+		AckNum: cumulativeAck,
+		Flags:  FlagACK,
+		Window: 65535,
 	}
 	ackBytes, _ := ack.Encode(nil)
 	cs := ComputeChecksum(ackBytes)
-	binary.BigEndian.PutUint32(ackBytes[17:21], cs)
+	binary.BigEndian.PutUint32(ackBytes[13:17], cs)
 	peerConn.WriteToUDP(ackBytes, senderConn.LocalAddr().(*net.UDPAddr))
 
 	time.Sleep(100 * time.Millisecond)
@@ -340,11 +207,15 @@ func TestSender_MaxRetransmitsRST(t *testing.T) {
 	}
 	defer senderConn.Close()
 
-	peerConn, _ := makePeerConn(t)
+	peerConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen peer: %v", err)
+	}
 	defer peerConn.Close()
 
-	sender := NewSender(senderConn, 47)
-	completeSenderHandshake(t, sender, peerConn, senderConn)
+	sender := NewSender(senderConn)
+	sender.Start(peerConn.LocalAddr().(*net.UDPAddr))
+	drainInitialAck(t, peerConn)
 
 	payload := []byte("data that will be retransmitted to death")
 	sender.Send(payload)
@@ -380,18 +251,22 @@ func TestSender_MaxRetransmitsRST(t *testing.T) {
 		}
 	case <-sender.done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for RST after max retransmits")
+		t.Fatal("timeout waiting for FIN after max retransmits")
 	}
 
 	close(done)
 
 	peerConn.SetReadDeadline(time.Now().Add(1 * time.Second))
-	buf := make([]byte, 1500)
-	n, _, err := peerConn.ReadFromUDP(buf)
-	if err == nil {
+	for {
+		buf := make([]byte, 1500)
+		n, _, err := peerConn.ReadFromUDP(buf)
+		if err != nil {
+			break
+		}
 		hdr, _, _ := Decode(buf[:n])
-		if hdr.Flags&FlagRST != 0 {
-			t.Log("RST was sent (expected)")
+		if hdr.Flags&FlagFIN != 0 {
+			t.Log("FIN was sent (expected)")
+			break
 		}
 	}
 }
@@ -403,7 +278,7 @@ func TestSender_StaleAckIgnored(t *testing.T) {
 	}
 	defer senderConn.Close()
 
-	sender := NewSender(senderConn, 48)
+	sender := NewSender(senderConn)
 
 	sender.mu.Lock()
 	sender.sendBase = 1000
@@ -427,7 +302,7 @@ func TestSender_StaleAckExactlySendBase(t *testing.T) {
 	}
 	defer senderConn.Close()
 
-	sender := NewSender(senderConn, 49)
+	sender := NewSender(senderConn)
 
 	sender.mu.Lock()
 	sender.sendBase = 1000
@@ -444,39 +319,6 @@ func TestSender_StaleAckExactlySendBase(t *testing.T) {
 	}
 }
 
-func TestSender_RSTHandling(t *testing.T) {
-	senderConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer senderConn.Close()
-
-	peerConn, _ := makePeerConn(t)
-	defer peerConn.Close()
-
-	sender := NewSender(senderConn, 50)
-	completeSenderHandshake(t, sender, peerConn, senderConn)
-
-	rst := &Header{SessionID: 50, Flags: FlagRST, RawWindow: 65535}
-	rstBytes, _ := rst.Encode(nil)
-	cs := ComputeChecksum(rstBytes)
-	binary.BigEndian.PutUint32(rstBytes[17:21], cs)
-	peerConn.WriteToUDP(rstBytes, senderConn.LocalAddr().(*net.UDPAddr))
-
-	select {
-	case <-sender.done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("sender done channel should close on RST")
-	}
-
-	sender.mu.Lock()
-	state := sender.state
-	sender.mu.Unlock()
-	if state != sendClosed {
-		t.Errorf("expected sendClosed, got state=%d", state)
-	}
-}
-
 func TestSender_FinPlusAckHandling(t *testing.T) {
 	senderConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	if err != nil {
@@ -484,16 +326,19 @@ func TestSender_FinPlusAckHandling(t *testing.T) {
 	}
 	defer senderConn.Close()
 
-	peerConn, _ := makePeerConn(t)
+	peerConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen peer: %v", err)
+	}
 	defer peerConn.Close()
 
-	sender := NewSender(senderConn, 51)
-	completeSenderHandshake(t, sender, peerConn, senderConn)
+	sender := NewSender(senderConn)
+	sender.Start(peerConn.LocalAddr().(*net.UDPAddr))
 
-	finAck := &Header{SessionID: 51, Flags: FlagFIN | FlagACK, RawWindow: 65535}
+	finAck := &Header{Flags: FlagFIN | FlagACK, Window: 65535}
 	finAckBytes, _ := finAck.Encode(nil)
 	cs := ComputeChecksum(finAckBytes)
-	binary.BigEndian.PutUint32(finAckBytes[17:21], cs)
+	binary.BigEndian.PutUint32(finAckBytes[13:17], cs)
 	peerConn.WriteToUDP(finAckBytes, senderConn.LocalAddr().(*net.UDPAddr))
 
 	select {
@@ -517,7 +362,7 @@ func TestSender_CloseNotEstablished(t *testing.T) {
 	}
 	defer conn.Close()
 
-	sender := NewSender(conn, 52)
+	sender := NewSender(conn)
 	err = sender.Close()
 	if err == nil {
 		t.Error("Close on non-established sender should return error")
@@ -531,11 +376,14 @@ func TestSender_SendOverCwndBlocks(t *testing.T) {
 	}
 	defer senderConn.Close()
 
-	peerConn, _ := makePeerConn(t)
+	peerConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen peer: %v", err)
+	}
 	defer peerConn.Close()
 
-	sender := NewSender(senderConn, 53)
-	completeSenderHandshake(t, sender, peerConn, senderConn)
+	sender := NewSender(senderConn)
+	sender.Start(peerConn.LocalAddr().(*net.UDPAddr))
 
 	sender.mu.Lock()
 	sender.bbr.cwnd = bbrMinCwnd
@@ -573,56 +421,6 @@ func TestSender_InflightRecvWindowCaps(t *testing.T) {
 	}
 }
 
-func TestSender_ConcurrentSessions(t *testing.T) {
-	conn1, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer conn1.Close()
-
-	conn2, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer conn2.Close()
-
-	peerConn1, _ := makePeerConn(t)
-	defer peerConn1.Close()
-	peerConn2, _ := makePeerConn(t)
-	defer peerConn2.Close()
-
-	sender1 := NewSender(conn1, 100)
-	sender2 := NewSender(conn2, 200)
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		completeSenderHandshake(t, sender1, peerConn1, conn1)
-	}()
-	go func() {
-		defer wg.Done()
-		completeSenderHandshake(t, sender2, peerConn2, conn2)
-	}()
-
-	wg.Wait()
-
-	sender1.mu.Lock()
-	state1 := sender1.state
-	sender1.mu.Unlock()
-	sender2.mu.Lock()
-	state2 := sender2.state
-	sender2.mu.Unlock()
-
-	if state1 != sendEstablished {
-		t.Errorf("session 100 state=%d", state1)
-	}
-	if state2 != sendEstablished {
-		t.Errorf("session 200 state=%d", state2)
-	}
-}
-
 func TestSender_SendLargeDataChunked(t *testing.T) {
 	senderConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	if err != nil {
@@ -630,12 +428,16 @@ func TestSender_SendLargeDataChunked(t *testing.T) {
 	}
 	defer senderConn.Close()
 
-	peerConn, _ := makePeerConn(t)
+	peerConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen peer: %v", err)
+	}
 	defer peerConn.Close()
 
-	sender := NewSender(senderConn, 54)
+	sender := NewSender(senderConn)
 	sender.bbr.cwnd = 1000000
-	completeSenderHandshake(t, sender, peerConn, senderConn)
+	sender.Start(peerConn.LocalAddr().(*net.UDPAddr))
+	drainInitialAck(t, peerConn)
 
 	largeData := make([]byte, 3000)
 	for i := range largeData {
@@ -674,11 +476,15 @@ func TestSender_CloseWaitDrain(t *testing.T) {
 	}
 	defer senderConn.Close()
 
-	peerConn, _ := makePeerConn(t)
+	peerConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen peer: %v", err)
+	}
 	defer peerConn.Close()
 
-	sender := NewSender(senderConn, 55)
-	completeSenderHandshake(t, sender, peerConn, senderConn)
+	sender := NewSender(senderConn)
+	sender.Start(peerConn.LocalAddr().(*net.UDPAddr))
+	drainInitialAck(t, peerConn)
 
 	sender.Send([]byte("quick data"))
 
@@ -692,14 +498,13 @@ func TestSender_CloseWaitDrain(t *testing.T) {
 	firstSeq = hdr.SeqNum
 
 	ack := &Header{
-		SessionID: 55,
-		AckNum:    firstSeq + uint32(len(payload)),
-		Flags:     FlagACK,
-		RawWindow: 65535,
+		AckNum: firstSeq + uint32(len(payload)),
+		Flags:  FlagACK,
+		Window: 65535,
 	}
 	ackBytes, _ := ack.Encode(nil)
 	cs := ComputeChecksum(ackBytes)
-	binary.BigEndian.PutUint32(ackBytes[17:21], cs)
+	binary.BigEndian.PutUint32(ackBytes[13:17], cs)
 	peerConn.WriteToUDP(ackBytes, senderConn.LocalAddr().(*net.UDPAddr))
 
 	time.Sleep(100 * time.Millisecond)
