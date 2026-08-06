@@ -112,8 +112,9 @@ func TestTimerMultipleConcurrent(t *testing.T) {
 	tm := NewTimerManager(80*time.Millisecond, func(seq uint32) {
 		mu.Lock()
 		received[seq] = true
+		n := len(received)
 		mu.Unlock()
-		if len(received) >= 3 {
+		if n >= 3 {
 			close(done)
 		}
 	})

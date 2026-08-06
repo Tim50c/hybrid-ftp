@@ -22,3 +22,7 @@ opencode.json
 # report files
 report/
 genai/
+
+# test artifacts (generated during manual testing)
+*.bin
+!test/file_tests/*.bin

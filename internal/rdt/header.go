@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const HeaderSize = 21
+const HeaderSize = 17
 
 type UDPConn interface {
 	ReadFromUDP(b []byte) (int, *net.UDPAddr, error)
@@ -18,11 +18,9 @@ type UDPConn interface {
 }
 
 const (
-	FlagSYN  uint8 = 0x01
+	FlagDATA uint8 = 0x01
 	FlagFIN        = 0x02
 	FlagACK        = 0x04
-	FlagRST        = 0x08
-	FlagDATA       = 0x10
 )
 
 func WindowScale(flags uint8) uint8 {
@@ -34,21 +32,20 @@ func SetWindowScale(flags uint8, scale uint8) uint8 {
 }
 
 type Header struct {
-	SessionID  uint32
 	SeqNum     uint32
 	AckNum     uint32
 	Flags      uint8
 	PayloadLen uint16
-	RawWindow  uint16
+	Window     uint16
 	Checksum   uint32
 }
 
 func (h *Header) EffectiveWindow() uint32 {
-	return uint32(h.RawWindow) << WindowScale(h.Flags)
+	return uint32(h.Window) << WindowScale(h.Flags)
 }
 
 func (h *Header) SetWindow(win uint32, scale uint8) {
-	h.RawWindow = uint16(win >> scale)
+	h.Window = uint16(win >> scale)
 	h.Flags = SetWindowScale(h.Flags, scale)
 }
 
@@ -56,13 +53,12 @@ func (h *Header) Encode(payload []byte) ([]byte, error) {
 	h.PayloadLen = uint16(len(payload))
 	buf := make([]byte, HeaderSize+len(payload))
 
-	binary.BigEndian.PutUint32(buf[0:4], h.SessionID)
-	binary.BigEndian.PutUint32(buf[4:8], h.SeqNum)
-	binary.BigEndian.PutUint32(buf[8:12], h.AckNum)
-	buf[12] = h.Flags
-	binary.BigEndian.PutUint16(buf[13:15], h.PayloadLen)
-	binary.BigEndian.PutUint16(buf[15:17], h.RawWindow)
-	binary.BigEndian.PutUint32(buf[17:21], h.Checksum)
+	binary.BigEndian.PutUint32(buf[0:4], h.SeqNum)
+	binary.BigEndian.PutUint32(buf[4:8], h.AckNum)
+	buf[8] = h.Flags
+	binary.BigEndian.PutUint16(buf[9:11], h.PayloadLen)
+	binary.BigEndian.PutUint16(buf[11:13], h.Window)
+	binary.BigEndian.PutUint32(buf[13:17], h.Checksum)
 
 	copy(buf[HeaderSize:], payload)
 	return buf, nil
@@ -73,13 +69,12 @@ func Decode(data []byte) (*Header, []byte, error) {
 		return nil, nil, fmt.Errorf("packet too short: %d bytes", len(data))
 	}
 	h := &Header{
-		SessionID:  binary.BigEndian.Uint32(data[0:4]),
-		SeqNum:     binary.BigEndian.Uint32(data[4:8]),
-		AckNum:     binary.BigEndian.Uint32(data[8:12]),
-		Flags:      data[12],
-		PayloadLen: binary.BigEndian.Uint16(data[13:15]),
-		RawWindow:  binary.BigEndian.Uint16(data[15:17]),
-		Checksum:   binary.BigEndian.Uint32(data[17:21]),
+		SeqNum:     binary.BigEndian.Uint32(data[0:4]),
+		AckNum:     binary.BigEndian.Uint32(data[4:8]),
+		Flags:      data[8],
+		PayloadLen: binary.BigEndian.Uint16(data[9:11]),
+		Window:     binary.BigEndian.Uint16(data[11:13]),
+		Checksum:   binary.BigEndian.Uint32(data[13:17]),
 	}
 
 	expectedTotal := HeaderSize + int(h.PayloadLen)

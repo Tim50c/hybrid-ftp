@@ -38,8 +38,8 @@ func setupDataSender(sess *session.Session) (*rdt.Sender, error) {
 			sess.DataConn.Close()
 		}
 		sess.DataConn = udpConn
-		sender := rdt.NewSender(udpConn, 1)
-		if err := sender.Connect(sess.DataAddr); err != nil {
+		sender := rdt.NewSender(udpConn)
+		if err := sender.Start(sess.DataAddr); err != nil {
 			return nil, fmt.Errorf("rdt connect: %w", err)
 		}
 		return sender, nil
@@ -47,7 +47,7 @@ func setupDataSender(sess *session.Session) (*rdt.Sender, error) {
 	if sess.DataConn == nil {
 		return nil, fmt.Errorf("use PASV or PORT first")
 	}
-	sender := rdt.NewSender(sess.DataConn, 1)
+	sender := rdt.NewSender(sess.DataConn)
 	if err := sender.Accept(); err != nil {
 		return nil, fmt.Errorf("rdt accept: %w", err)
 	}
@@ -64,8 +64,8 @@ func setupDataReceiver(sess *session.Session) (*rdt.Receiver, error) {
 			sess.DataConn.Close()
 		}
 		sess.DataConn = udpConn
-		receiver := rdt.NewReceiver(udpConn, 1)
-		if err := receiver.Connect(sess.DataAddr); err != nil {
+		receiver := rdt.NewReceiver(udpConn)
+		if err := receiver.Start(sess.DataAddr); err != nil {
 			return nil, fmt.Errorf("rdt connect: %w", err)
 		}
 		return receiver, nil
@@ -73,7 +73,7 @@ func setupDataReceiver(sess *session.Session) (*rdt.Receiver, error) {
 	if sess.DataConn == nil {
 		return nil, fmt.Errorf("use PASV or PORT first")
 	}
-	receiver := rdt.NewReceiver(sess.DataConn, 1)
+	receiver := rdt.NewReceiver(sess.DataConn)
 	if err := receiver.Accept(); err != nil {
 		return nil, fmt.Errorf("rdt accept: %w", err)
 	}
@@ -81,14 +81,12 @@ func setupDataReceiver(sess *session.Session) (*rdt.Receiver, error) {
 }
 
 func cleanupDataConn(sess *session.Session) {
-	if sess.DataMode == "PORT" {
-		if sess.DataConn != nil {
-			sess.DataConn.Close()
-			sess.DataConn = nil
-		}
-		sess.DataMode = ""
-		sess.DataAddr = nil
+	if sess.DataConn != nil {
+		sess.DataConn.Close()
+		sess.DataConn = nil
 	}
+	sess.DataMode = ""
+	sess.DataAddr = nil
 }
 
 func dataModeReady(sess *session.Session) bool {
@@ -267,7 +265,9 @@ func handleLIST(conn net.Conn, sess *session.Session, root string, args string) 
 			return
 		default:
 		}
+		sess.TransferMu.Lock()
 		sess.TransferReplied = true
+		sess.TransferMu.Unlock()
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Directory listing complete.")
 	}()
 }
@@ -316,7 +316,7 @@ func handleRETR(conn net.Conn, sess *session.Session, root string, args string) 
 			cleanupDataConn(sess)
 		}()
 
-		buf := make([]byte, 1400)
+		buf := make([]byte, rdt.MSS)
 		for {
 			select {
 			case <-sess.TransferCtx.Done():
@@ -340,7 +340,9 @@ func handleRETR(conn net.Conn, sess *session.Session, root string, args string) 
 			}
 		}
 
+		sess.TransferMu.Lock()
 		sess.TransferReplied = true
+		sess.TransferMu.Unlock()
 			tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Transfer complete.")
 	}()
 }
@@ -402,7 +404,9 @@ func handleSTOR(conn net.Conn, sess *session.Session, root string, args string) 
 			}
 		}
 
+		sess.TransferMu.Lock()
 		sess.TransferReplied = true
+		sess.TransferMu.Unlock()
 			tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Transfer complete.")
 	}()
 }
@@ -610,7 +614,9 @@ func handleNLST(conn net.Conn, sess *session.Session, root string, args string) 
 			return
 		default:
 		}
+		sess.TransferMu.Lock()
 		sess.TransferReplied = true
+		sess.TransferMu.Unlock()
 			tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Name list complete.")
 	}()
 }
@@ -671,7 +677,9 @@ func handleAPPE(conn net.Conn, sess *session.Session, root string, args string) 
 			}
 		}
 
+		sess.TransferMu.Lock()
 		sess.TransferReplied = true
+		sess.TransferMu.Unlock()
 			tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "Transfer complete.")
 	}()
 }
@@ -733,7 +741,9 @@ func handleSTOU(conn net.Conn, sess *session.Session, root string, args string) 
 			}
 		}
 
+		sess.TransferMu.Lock()
 		sess.TransferReplied = true
+		sess.TransferMu.Unlock()
 			tcpctrl.WriteReply(conn, tcpctrl.ReplyPathCreated, fmt.Sprintf("\"%s\" stored.", uniqueName))
 	}()
 }
@@ -792,9 +802,11 @@ func handleABOR(conn net.Conn, sess *session.Session, root string, args string) 
 	if sess.TransferCancel != nil {
 		sess.TransferCancel()
 	}
+	sess.TransferMu.Lock()
 	if !sess.TransferReplied {
 		tcpctrl.WriteReply(conn, tcpctrl.ReplyClosingData, "ABOR successful.")
 	}
+	sess.TransferMu.Unlock()
 }
 
 func handleMDTM(conn net.Conn, sess *session.Session, root string, args string) {

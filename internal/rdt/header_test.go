@@ -7,12 +7,11 @@ import (
 func TestHeaderEncodeDecode_RoundTrip(t *testing.T) {
 	payload := []byte("hello world payload data")
 	h := &Header{
-		SessionID:  42,
 		SeqNum:     1234,
 		AckNum:     5678,
 		Flags:      FlagDATA | FlagACK,
 		PayloadLen: uint16(len(payload)),
-		RawWindow:  64000,
+		Window:     64000,
 		Checksum:   0,
 	}
 
@@ -31,9 +30,6 @@ func TestHeaderEncodeDecode_RoundTrip(t *testing.T) {
 		t.Fatalf("Decode error: %v", err)
 	}
 
-	if decoded.SessionID != h.SessionID {
-		t.Errorf("SessionID = %d, want %d", decoded.SessionID, h.SessionID)
-	}
 	if decoded.SeqNum != h.SeqNum {
 		t.Errorf("SeqNum = %d, want %d", decoded.SeqNum, h.SeqNum)
 	}
@@ -46,8 +42,8 @@ func TestHeaderEncodeDecode_RoundTrip(t *testing.T) {
 	if decoded.PayloadLen != h.PayloadLen {
 		t.Errorf("PayloadLen = %d, want %d", decoded.PayloadLen, h.PayloadLen)
 	}
-	if decoded.RawWindow != h.RawWindow {
-		t.Errorf("RawWindow = %d, want %d", decoded.RawWindow, h.RawWindow)
+	if decoded.Window != h.Window {
+		t.Errorf("Window = %d, want %d", decoded.Window, h.Window)
 	}
 	if string(decodedPayload) != string(payload) {
 		t.Errorf("payload mismatch: %q vs %q", decodedPayload, payload)
@@ -56,12 +52,11 @@ func TestHeaderEncodeDecode_RoundTrip(t *testing.T) {
 
 func TestHeaderEncodeDecode_NoPayload(t *testing.T) {
 	h := &Header{
-		SessionID:  1,
 		SeqNum:     0,
 		AckNum:     100,
 		Flags:      FlagACK,
 		PayloadLen: 0,
-		RawWindow:  65535,
+		Window:     65535,
 	}
 
 	encoded, err := h.Encode(nil)
@@ -94,8 +89,8 @@ func TestHeaderDecode_TooShort(t *testing.T) {
 
 func TestHeaderDecode_PayloadLengthMismatch(t *testing.T) {
 	buf := make([]byte, HeaderSize+50)
-	buf[13] = 0
-	buf[14] = 100
+	buf[9] = 0
+	buf[10] = 100
 	_, _, err := Decode(buf)
 	if err == nil {
 		t.Error("Decode should fail on payload length mismatch")
@@ -108,11 +103,10 @@ func TestHeaderDecode_LargePayload(t *testing.T) {
 		payload[i] = byte(i % 256)
 	}
 	h := &Header{
-		SessionID:  999,
 		SeqNum:     1400,
 		Flags:      FlagDATA,
 		PayloadLen: 1400,
-		RawWindow:  32000,
+		Window:     32000,
 	}
 	encoded, _ := h.Encode(payload)
 	decoded, decPayload, err := Decode(encoded)
@@ -128,20 +122,14 @@ func TestHeaderDecode_LargePayload(t *testing.T) {
 }
 
 func TestFlags_Const(t *testing.T) {
-	if FlagSYN != 0x01 {
-		t.Errorf("FlagSYN = %02x, want 0x01", FlagSYN)
+	if FlagDATA != 0x01 {
+		t.Errorf("FlagDATA = %02x, want 0x01", FlagDATA)
 	}
 	if FlagFIN != 0x02 {
 		t.Errorf("FlagFIN = %02x, want 0x02", FlagFIN)
 	}
 	if FlagACK != 0x04 {
 		t.Errorf("FlagACK = %02x, want 0x04", FlagACK)
-	}
-	if FlagRST != 0x08 {
-		t.Errorf("FlagRST = %02x, want 0x08", FlagRST)
-	}
-	if FlagDATA != 0x10 {
-		t.Errorf("FlagDATA = %02x, want 0x10", FlagDATA)
 	}
 }
 
@@ -157,7 +145,7 @@ func TestHeader_EffectiveWindow(t *testing.T) {
 		{32768, 3, 262144},
 	}
 	for _, tt := range tests {
-		h := &Header{RawWindow: tt.raw}
+		h := &Header{Window: tt.raw}
 		h.Flags = SetWindowScale(h.Flags, tt.scale)
 		got := h.EffectiveWindow()
 		if got != tt.want {
@@ -168,23 +156,19 @@ func TestHeader_EffectiveWindow(t *testing.T) {
 
 func TestHeaderEncodeDecode_AllFlagCombos(t *testing.T) {
 	flagCombos := []uint8{
-		FlagSYN,
-		FlagSYN | FlagACK,
-		FlagACK,
 		FlagDATA,
+		FlagACK,
 		FlagDATA | FlagACK,
 		FlagFIN,
 		FlagFIN | FlagACK,
-		FlagRST,
 	}
 	payload := []byte("flag combo test data")
 	for _, flags := range flagCombos {
 		h := &Header{
-			SessionID: 100,
-			SeqNum:    0,
-			AckNum:    200,
-			Flags:     flags,
-			RawWindow: 64000,
+			SeqNum: 0,
+			AckNum: 200,
+			Flags:  flags,
+			Window: 64000,
 		}
 		encoded, err := h.Encode(payload)
 		if err != nil {
@@ -203,8 +187,8 @@ func TestHeaderEncodeDecode_AllFlagCombos(t *testing.T) {
 func TestHeader_SetWindow(t *testing.T) {
 	h := &Header{}
 	h.SetWindow(256000, 2)
-	if h.RawWindow != 64000 {
-		t.Errorf("RawWindow = %d, want 64000", h.RawWindow)
+	if h.Window != 64000 {
+		t.Errorf("Window = %d, want 64000", h.Window)
 	}
 	if WindowScale(h.Flags) != 2 {
 		t.Errorf("WindowScale = %d, want 2", WindowScale(h.Flags))
@@ -215,25 +199,25 @@ func TestHeader_SetWindow(t *testing.T) {
 }
 
 func TestHeaderDecode_ReservedBitsIgnored(t *testing.T) {
-	h := &Header{SessionID: 1, Flags: FlagSYN | 0xE0, RawWindow: 65535}
+	h := &Header{Flags: FlagDATA | 0xE0, Window: 65535}
 	encoded, _ := h.Encode(nil)
 	decoded, _, err := Decode(encoded)
 	if err != nil {
 		t.Fatalf("Decode with reserved bits: %v", err)
 	}
-	if decoded.Flags&FlagSYN != FlagSYN {
-		t.Error("SYN flag should survive reserved bits")
+	if decoded.Flags&FlagDATA != FlagDATA {
+		t.Error("DATA flag should survive reserved bits")
 	}
 }
 
 func TestHeaderDecode_AllZeros(t *testing.T) {
-	h := &Header{SessionID: 0, SeqNum: 0, AckNum: 0, Flags: 0, PayloadLen: 0, RawWindow: 0}
+	h := &Header{SeqNum: 0, AckNum: 0, Flags: 0, PayloadLen: 0, Window: 0}
 	encoded, _ := h.Encode(nil)
 	decoded, _, err := Decode(encoded)
 	if err != nil {
 		t.Fatalf("Decode all-zeros: %v", err)
 	}
-	if decoded.SessionID != 0 || decoded.Flags != 0 {
+	if decoded.Flags != 0 {
 		t.Error("all-zeros header should decode correctly")
 	}
 }
@@ -241,21 +225,16 @@ func TestHeaderDecode_AllZeros(t *testing.T) {
 func TestHeaderEncodeDecode_MaxValues(t *testing.T) {
 	payload := []byte("max vals")
 	h := &Header{
-		SessionID:  0xFFFFFFFF,
 		SeqNum:     0xFFFFFFFF,
 		AckNum:     0xFFFFFFFF,
-		Flags:      FlagDATA | FlagACK | FlagSYN | FlagFIN | FlagRST,
+		Flags:      FlagDATA | FlagACK | FlagFIN,
 		PayloadLen: uint16(len(payload)),
-		RawWindow:  0xFFFF,
-		Checksum:   0xFFFFFFFF,
+		Window:     0xFFFF,
 	}
 	encoded, _ := h.Encode(payload)
 	decoded, decPayload, err := Decode(encoded)
 	if err != nil {
 		t.Fatalf("Decode max values: %v", err)
-	}
-	if decoded.SessionID != 0xFFFFFFFF {
-		t.Errorf("SessionID: got 0x%08X", decoded.SessionID)
 	}
 	if decoded.SeqNum != 0xFFFFFFFF {
 		t.Errorf("SeqNum: got 0x%08X", decoded.SeqNum)
@@ -263,8 +242,8 @@ func TestHeaderEncodeDecode_MaxValues(t *testing.T) {
 	if decoded.AckNum != 0xFFFFFFFF {
 		t.Errorf("AckNum: got 0x%08X", decoded.AckNum)
 	}
-	if decoded.RawWindow != 0xFFFF {
-		t.Errorf("RawWindow: got 0x%04X", decoded.RawWindow)
+	if decoded.Window != 0xFFFF {
+		t.Errorf("Window: got 0x%04X", decoded.Window)
 	}
 	if string(decPayload) != string(payload) {
 		t.Errorf("payload mismatch: %q vs %q", decPayload, payload)
@@ -288,7 +267,7 @@ func TestHeaderEncode_PayloadLenAutoSet(t *testing.T) {
 }
 
 func TestHeaderDecode_ExactFit(t *testing.T) {
-	h := &Header{SessionID: 77, SeqNum: 100, Flags: FlagDATA}
+	h := &Header{SeqNum: 100, Flags: FlagDATA}
 	payload := []byte("exact")
 	encoded, _ := h.Encode(payload)
 

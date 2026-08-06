@@ -621,8 +621,8 @@ func TestE2E_STOU(t *testing.T) {
 	udpConn, _ := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
 	defer udpConn.Close()
 
-	sender := rdt.NewSender(udpConn, 1)
-	sender.Connect(udpAddr)
+	sender := rdt.NewSender(udpConn)
+	sender.Start(udpAddr)
 	sender.Send([]byte("unique upload"))
 	sender.Close()
 
@@ -662,8 +662,8 @@ func TestE2E_APPE(t *testing.T) {
 	udpConn, _ := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
 	defer udpConn.Close()
 
-	sender := rdt.NewSender(udpConn, 1)
-	sender.Connect(udpAddr)
+	sender := rdt.NewSender(udpConn)
+	sender.Start(udpAddr)
 	sender.Send([]byte(" world"))
 	sender.Close()
 
@@ -785,8 +785,7 @@ func TestE2E_PORT_Transfer(t *testing.T) {
 		t.Fatalf("RETR: expected 150, got %s", r)
 	}
 
-	sessionID := uint32(1)
-	receiver := rdt.NewReceiver(udpConn, sessionID)
+	receiver := rdt.NewReceiver(udpConn)
 
 	recvCh := make(chan []byte, 1)
 	go func() {
@@ -1160,8 +1159,8 @@ func TestE2E_STOR_Binary(t *testing.T) {
 	udpConn, _ := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
 	defer udpConn.Close()
 
-	sender := rdt.NewSender(udpConn, 1)
-	sender.Connect(udpAddr)
+	sender := rdt.NewSender(udpConn)
+	sender.Start(udpAddr)
 	sender.Send(payload)
 	time.Sleep(200 * time.Millisecond)
 	sender.Close()
@@ -1260,10 +1259,9 @@ func doRDTDownloadWithTimeout(t *testing.T, host string, port int, timeout time.
 	}
 	defer udpConn.Close()
 
-	sessionID := uint32(1)
-	r := rdt.NewReceiver(udpConn, sessionID)
-	if err := r.Connect(udpAddr); err != nil {
-		return nil, fmt.Errorf("rdt connect: %w", err)
+	r := rdt.NewReceiver(udpConn)
+	if err := r.Start(udpAddr); err != nil {
+		return nil, fmt.Errorf("rdt start: %w", err)
 	}
 
 	recvCh := r.Receive()
@@ -1299,10 +1297,9 @@ func doRDTDownload(t *testing.T, host string, port int) ([]byte, error) {
 	}
 	defer udpConn.Close()
 
-	sessionID := uint32(1)
-	r := rdt.NewReceiver(udpConn, sessionID)
-	if err := r.Connect(udpAddr); err != nil {
-		return nil, fmt.Errorf("rdt connect: %w", err)
+	r := rdt.NewReceiver(udpConn)
+	if err := r.Start(udpAddr); err != nil {
+		return nil, fmt.Errorf("rdt start: %w", err)
 	}
 
 	recvCh := r.Receive()
@@ -1364,6 +1361,12 @@ func TestE2E_PASV_MultiTransfer(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	fc.readReply(t)
 
+	reply = fc.sendAndRead(t, "PASV")
+	host, port, err = parsePASVReply(reply)
+	if err != nil {
+		t.Fatalf("parse PASV: %v", err)
+	}
+
 	r = fc.sendAndRead(t, "RETR second.txt")
 	if !strings.HasPrefix(r, "150") {
 		t.Fatalf("second RETR: expected 150, got %s", r)
@@ -1408,8 +1411,8 @@ func TestE2E_PASV_UploadThenDownload(t *testing.T) {
 	addr := fmt.Sprintf("%s:%d", host, port)
 	udpAddr, _ := net.ResolveUDPAddr("udp", addr)
 	udpConn, _ := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
-	sender := rdt.NewSender(udpConn, 1)
-	sender.Connect(udpAddr)
+	sender := rdt.NewSender(udpConn)
+	sender.Start(udpAddr)
 	sender.Send(payload)
 	time.Sleep(200 * time.Millisecond)
 	sender.Close()
@@ -1417,6 +1420,9 @@ func TestE2E_PASV_UploadThenDownload(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond)
 	fc.readReply(t)
+
+	reply = fc.sendAndRead(t, "PASV")
+	host, port, _ = parsePASVReply(reply)
 
 	r = fc.sendAndRead(t, "RETR up.bin")
 	if !strings.HasPrefix(r, "150") {
@@ -1656,8 +1662,8 @@ func TestE2E_RoundTripHashCheck(t *testing.T) {
 	addr := fmt.Sprintf("%s:%d", host, port)
 	udpAddr, _ := net.ResolveUDPAddr("udp", addr)
 	udpConn, _ := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
-	sender := rdt.NewSender(udpConn, 1)
-	sender.Connect(udpAddr)
+	sender := rdt.NewSender(udpConn)
+	sender.Start(udpAddr)
 	sender.Send(payload)
 	time.Sleep(200 * time.Millisecond)
 	sender.Close()
@@ -1847,7 +1853,7 @@ func TestE2E_PORT_RoundTrip_HASH(t *testing.T) {
 		t.Fatalf("STOR: expected 150, got %s", r)
 	}
 
-	sender := rdt.NewSender(udpConn, 1)
+	sender := rdt.NewSender(udpConn)
 	sender.Accept()
 	sender.Send(payload)
 	time.Sleep(200 * time.Millisecond)
@@ -1876,7 +1882,7 @@ func TestE2E_PORT_RoundTrip_HASH(t *testing.T) {
 		t.Fatalf("RETR: expected 150, got %s", r)
 	}
 
-	receiver := rdt.NewReceiver(udpConn2, 1)
+	receiver := rdt.NewReceiver(udpConn2)
 	go func() {
 		receiver.Accept()
 	}()

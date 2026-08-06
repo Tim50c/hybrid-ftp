@@ -10,15 +10,15 @@ import (
 	"time"
 )
 
-func setupSenderReceiver(sessionID uint32, lossyCfg LossyConfig) (*Sender, *Receiver, func()) {
+func setupSenderReceiver(lossyCfg LossyConfig) (*Sender, *Receiver, func()) {
 	senderConn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	recvConn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 
 	lossySenderConn := NewLossyUDPConn(senderConn, lossyCfg)
 	lossyRecvConn := NewLossyUDPConn(recvConn, lossyCfg)
 
-	sender := NewSender(lossySenderConn, sessionID)
-	receiver := NewReceiver(lossyRecvConn, sessionID)
+	sender := NewSender(lossySenderConn)
+	receiver := NewReceiver(lossyRecvConn)
 
 	cleanup := func() {
 		senderConn.Close()
@@ -44,8 +44,8 @@ func runTransfer(sender *Sender, receiver *Receiver, data []byte, recvAddr *net.
 		recvCh <- buf
 	}()
 
-	if err := sender.Connect(recvAddr); err != nil {
-		return nil, fmt.Errorf("connect: %w", err)
+	if err := sender.Start(recvAddr); err != nil {
+		return nil, fmt.Errorf("start: %w", err)
 	}
 
 	if err := sender.Send(data); err != nil {
@@ -78,8 +78,8 @@ func TestRDT_Transfer_NoLoss(t *testing.T) {
 	defer senderConn.Close()
 	defer recvConn.Close()
 
-	sender := NewSender(senderConn, 1001)
-	receiver := NewReceiver(recvConn, 1001)
+	sender := NewSender(senderConn)
+	receiver := NewReceiver(recvConn)
 
 	data := []byte("Hello World! No loss transfer test.")
 	got, err := runTransfer(sender, receiver, data, recvConn.LocalAddr().(*net.UDPAddr), 10*time.Second)
@@ -99,8 +99,8 @@ func TestRDT_Transfer_10PercentLoss_1MB(t *testing.T) {
 	defer senderConn.Close()
 	defer recvConn.Close()
 
-	sender := NewSender(NewLossyUDPConn(senderConn, cfg), 1002)
-	receiver := NewReceiver(NewLossyUDPConn(recvConn, cfg), 1002)
+	sender := NewSender(NewLossyUDPConn(senderConn, cfg))
+	receiver := NewReceiver(NewLossyUDPConn(recvConn, cfg))
 
 	data := make([]byte, 100000)
 	for i := range data {
@@ -126,8 +126,8 @@ func TestRDT_Transfer_25PercentLoss_500KB(t *testing.T) {
 	defer senderConn.Close()
 	defer recvConn.Close()
 
-	sender := NewSender(NewLossyUDPConn(senderConn, cfg), 1003)
-	receiver := NewReceiver(NewLossyUDPConn(recvConn, cfg), 1003)
+	sender := NewSender(NewLossyUDPConn(senderConn, cfg))
+	receiver := NewReceiver(NewLossyUDPConn(recvConn, cfg))
 
 	data := make([]byte, 50000)
 	for i := range data {
@@ -153,8 +153,8 @@ func TestRDT_Transfer_Corruption_5Percent_500KB(t *testing.T) {
 	defer senderConn.Close()
 	defer recvConn.Close()
 
-	sender := NewSender(NewLossyUDPConn(senderConn, cfg), 1004)
-	receiver := NewReceiver(NewLossyUDPConn(recvConn, cfg), 1004)
+	sender := NewSender(NewLossyUDPConn(senderConn, cfg))
+	receiver := NewReceiver(NewLossyUDPConn(recvConn, cfg))
 
 	data := make([]byte, 50000)
 	for i := range data {
@@ -180,8 +180,8 @@ func TestRDT_Transfer_Reordering_50Percent_1MB(t *testing.T) {
 	defer senderConn.Close()
 	defer recvConn.Close()
 
-	sender := NewSender(NewLossyUDPConn(senderConn, cfg), 1005)
-	receiver := NewReceiver(NewLossyUDPConn(recvConn, cfg), 1005)
+	sender := NewSender(NewLossyUDPConn(senderConn, cfg))
+	receiver := NewReceiver(NewLossyUDPConn(recvConn, cfg))
 
 	data := make([]byte, 100000)
 	for i := range data {
@@ -212,8 +212,8 @@ func TestRDT_Transfer_CombinedImpairments_500KB(t *testing.T) {
 	defer senderConn.Close()
 	defer recvConn.Close()
 
-	sender := NewSender(NewLossyUDPConn(senderConn, cfg), 1006)
-	receiver := NewReceiver(NewLossyUDPConn(recvConn, cfg), 1006)
+	sender := NewSender(NewLossyUDPConn(senderConn, cfg))
+	receiver := NewReceiver(NewLossyUDPConn(recvConn, cfg))
 
 	data := make([]byte, 50000)
 	for i := range data {
@@ -238,8 +238,8 @@ func TestRDT_Transfer_ZeroByteFile(t *testing.T) {
 	defer senderConn.Close()
 	defer recvConn.Close()
 
-	sender := NewSender(senderConn, 1007)
-	receiver := NewReceiver(recvConn, 1007)
+	sender := NewSender(senderConn)
+	receiver := NewReceiver(recvConn)
 
 	data := []byte{}
 	got, err := runTransfer(sender, receiver, data, recvConn.LocalAddr().(*net.UDPAddr), 10*time.Second)
@@ -258,8 +258,8 @@ func TestRDT_Transfer_5MB_NoLoss_HashCheck(t *testing.T) {
 	defer senderConn.Close()
 	defer recvConn.Close()
 
-	sender := NewSender(senderConn, 1008)
-	receiver := NewReceiver(recvConn, 1008)
+	sender := NewSender(senderConn)
+	receiver := NewReceiver(recvConn)
 
 	const size = 2 * 1024 * 1024
 	data := make([]byte, size)
@@ -290,8 +290,8 @@ func TestRDT_Transfer_HashCheck_WithLoss(t *testing.T) {
 	defer senderConn.Close()
 	defer recvConn.Close()
 
-	sender := NewSender(NewLossyUDPConn(senderConn, cfg), 1009)
-	receiver := NewReceiver(NewLossyUDPConn(recvConn, cfg), 1009)
+	sender := NewSender(NewLossyUDPConn(senderConn, cfg))
+	receiver := NewReceiver(NewLossyUDPConn(recvConn, cfg))
 
 	const size = 512 * 1024
 	data := make([]byte, size)
@@ -338,8 +338,8 @@ func TestRDT_ConcurrentSessionsSingleConn(t *testing.T) {
 		clientConn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 		defer clientConn.Close()
 
-		receiver := NewReceiver(clientConn, sessionID)
-		sender := NewSender(serverConn, sessionID)
+		receiver := NewReceiver(clientConn)
+		sender := NewSender(serverConn)
 
 		recvCh := make(chan []byte, 1)
 		go func() {
@@ -354,8 +354,8 @@ func TestRDT_ConcurrentSessionsSingleConn(t *testing.T) {
 			recvCh <- buf
 		}()
 
-		if err := sender.Connect(clientConn.LocalAddr().(*net.UDPAddr)); err != nil {
-			t.Errorf("session %d Connect: %v", sessionID, err)
+		if err := sender.Start(clientConn.LocalAddr().(*net.UDPAddr)); err != nil {
+			t.Errorf("session %d Start: %v", sessionID, err)
 			return
 		}
 		if err := sender.Send(data); err != nil {
@@ -395,7 +395,7 @@ func TestRDT_ConcurrentSessionsSingleConn(t *testing.T) {
 }
 
 func TestRDT_RetransmitExhaustion_RST(t *testing.T) {
-	t.Skip("Requires high drop rate which makes handshake unreliable; max retransmit logic already tested in TestSender_MaxRetransmitsRST")
+	t.Skip("FIN replaces RST; max retransmit logic tested in TestSender_MaxRetransmitsRST")
 }
 
 func TestRDT_BBR_StateTransitionsDuringTransfer(t *testing.T) {
@@ -405,8 +405,8 @@ func TestRDT_BBR_StateTransitionsDuringTransfer(t *testing.T) {
 	defer senderConn.Close()
 	defer recvConn.Close()
 
-	sender := NewSender(NewLossyUDPConn(senderConn, cfg), 1011)
-	receiver := NewReceiver(NewLossyUDPConn(recvConn, cfg), 1011)
+	sender := NewSender(NewLossyUDPConn(senderConn, cfg))
+	receiver := NewReceiver(NewLossyUDPConn(recvConn, cfg))
 
 	data := make([]byte, 200000)
 	for i := range data {
@@ -444,8 +444,8 @@ func TestRDT_BinaryAllByteValues(t *testing.T) {
 	defer senderConn.Close()
 	defer recvConn.Close()
 
-	sender := NewSender(senderConn, 1012)
-	receiver := NewReceiver(recvConn, 1012)
+	sender := NewSender(senderConn)
+	receiver := NewReceiver(recvConn)
 
 	const size = 256 * 256
 	data := make([]byte, size)
@@ -473,8 +473,8 @@ func TestRDT_MultipleTransfers_Sequential(t *testing.T) {
 		recvConn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 		defer recvConn.Close()
 
-		sender := NewSender(senderConn, uint32(1013+i))
-		receiver := NewReceiver(recvConn, uint32(1013+i))
+		sender := NewSender(senderConn)
+		receiver := NewReceiver(recvConn)
 
 		data := []byte(fmt.Sprintf("transfer %d payload", i))
 		got, err := runTransfer(sender, receiver, data, recvConn.LocalAddr().(*net.UDPAddr), 10*time.Second)
@@ -493,8 +493,8 @@ func TestRDT_BBR_CongestionWindowGrowth(t *testing.T) {
 	defer senderConn.Close()
 	defer recvConn.Close()
 
-	sender := NewSender(senderConn, 1020)
-	receiver := NewReceiver(recvConn, 1020)
+	sender := NewSender(senderConn)
+	receiver := NewReceiver(recvConn)
 
 	initialCwnd := sender.bbr.cwnd
 
@@ -513,7 +513,7 @@ func TestRDT_BBR_CongestionWindowGrowth(t *testing.T) {
 		recvDone <- buf
 	}()
 
-	sender.Connect(recvConn.LocalAddr().(*net.UDPAddr))
+	sender.Start(recvConn.LocalAddr().(*net.UDPAddr))
 	sender.Send(data)
 
 	time.Sleep(time.Second)
