@@ -220,7 +220,7 @@ func (s *Sender) sendLoop() {
 				select {
 				case <-s.done:
 					return
-				case <-time.After(10 * time.Millisecond):
+				case <-time.After(1 * time.Millisecond):
 				}
 				s.mu.Lock()
 			}

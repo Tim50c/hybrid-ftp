@@ -23,7 +23,7 @@ const (
 	bbrProbeBWGainDown  = 0.75
 	bbrProbeBWGainSteady = 1.0
 	bbrStartupFullBwCnt = 3
-	bbrProbeRTTInterval = 10 * time.Second
+	bbrProbeRTTInterval = 30 * time.Second
 	bbrProbeRTTDuration = 200 * time.Millisecond
 	bbrMinCwnd          = 4 * MSS
 	bbrBwFilterLen      = 10
@@ -110,14 +110,14 @@ func (b *BBR) OnACK(ackedBytes uint32, rtt time.Duration, sentAt time.Time, deli
 	}
 
 	if b.roundStart {
-		b.nextRoundDelivered = b.delivered
+		b.nextRoundDelivered = b.delivered + uint64(b.cwnd)
 		b.roundStart = false
 	}
 	if b.delivered >= b.nextRoundDelivered {
 		b.bwWindow[b.bwWindowIdx%bbrBwFilterLen] = b.roundBw
 		b.bwWindowIdx++
 		b.roundBw = deliveryRate
-		b.nextRoundDelivered = b.delivered
+		b.nextRoundDelivered = b.delivered + uint64(b.cwnd)
 	} else {
 		if deliveryRate > b.roundBw {
 			b.roundBw = deliveryRate
