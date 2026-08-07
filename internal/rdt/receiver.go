@@ -45,8 +45,8 @@ func NewReceiver(conn UDPConn) *Receiver {
 		recvBuffer: make(map[uint32][]byte),
 		recvWindow: baseWindow,
 		myScale:    scale,
-		maxBuffer:  1000,
-		output:     make(chan []byte, 100),
+		maxBuffer:  2000,
+		output:     make(chan []byte, 5000),
 		done:       make(chan struct{}),
 		recvReady:  make(chan struct{}),
 	}
@@ -287,7 +287,6 @@ func (r *Receiver) handleData(hdr *Header, payload []byte) {
 		if _, exists := r.recvBuffer[hdr.SeqNum]; !exists {
 			if len(r.recvBuffer) < r.maxBuffer {
 				r.recvBuffer[hdr.SeqNum] = payload
-				log.Printf("[RDT] buffered out-of-order seq=%d (rcvBase=%d)", hdr.SeqNum, r.rcvBase)
 			}
 		}
 		r.sendAck(r.rcvBase)
