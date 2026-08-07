@@ -158,6 +158,7 @@ func (s *Sender) Close() error {
 	select {
 	case <-s.done:
 	case <-time.After(5 * time.Second):
+		s.closeOnce.Do(func() { close(s.done) })
 	}
 	return nil
 }
@@ -292,6 +293,11 @@ func (s *Sender) recvLoop() {
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue
+			}
+			select {
+			case <-s.done:
+				return
+			default:
 			}
 			log.Printf("[RDT] sender recv error: %v", err)
 			return
