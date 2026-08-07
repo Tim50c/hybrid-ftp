@@ -218,13 +218,13 @@ func TestBBR_PROBE_BW_To_PROBE_RTT(t *testing.T) {
 	b.state = bbrProbeBW
 	b.rtprop = 50 * time.Millisecond
 	b.pacingGain = bbrProbeBWGainSteady
-	b.lastProbeRTT = time.Now().Add(-11 * time.Second)
+	b.lastProbeRTT = time.Now().Add(-31 * time.Second)
 	b.cwnd = 50000
 
 	b.handleProbeBW(time.Now())
 
 	if b.state != bbrProbeRTT {
-		t.Errorf("expected PROBE_RTT after 10s, got state=%d", b.state)
+		t.Errorf("expected PROBE_RTT after 30s, got state=%d", b.state)
 	}
 	if !b.inProbeRTT {
 		t.Error("expected inProbeRTT=true")
@@ -382,7 +382,7 @@ func TestBBR_FullLifecycle(t *testing.T) {
 		t.Fatalf("DRAIN->PROBE_BW: expected PROBE_BW, got %d", b.state)
 	}
 
-	b.lastProbeRTT = now.Add(-11 * time.Second)
+	b.lastProbeRTT = now.Add(-31 * time.Second)
 	b.phaseStart = now.Add(-200 * time.Millisecond)
 	b.handleProbeBW(now)
 
